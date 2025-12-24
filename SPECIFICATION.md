@@ -4,6 +4,11 @@
 
 科学研究費助成事業データベース（KAKEN）からデータを検索・取得するためのMCP（Model Context Protocol）サーバー。
 
+**特徴:**
+- API登録不要 - KAKENウェブサイトから直接データを取得（ウェブスクレイピング方式）
+- 研究課題・研究者の検索が可能
+- ページネーション対応
+
 ## KAKENについて
 
 ### データベース概要
@@ -26,97 +31,31 @@
 
 ---
 
-## KAKEN API 仕様
+## データ取得方式
 
-### 認証
+### ウェブスクレイピング
 
-APIを利用するには、CiNii Web API開発者登録で取得したApplication IDが必要。
+本MCPはKAKENウェブサイトのHTMLを直接パースしてデータを取得します。API登録（APP_ID）は不要です。
 
-- **登録URL**: https://support.nii.ac.jp/ja/cinii/api/developer
-- **パラメータ形式**: `appid=xxxxxxxx`
+### 対象URL
 
-### 研究課題検索 API
+| 機能 | URL形式 |
+|-----|---------|
+| 研究課題検索 | `https://kaken.nii.ac.jp/ja/search/?kw={keyword}` |
+| 研究課題詳細 | `https://kaken.nii.ac.jp/ja/grant/KAKENHI-PROJECT-{id}/` |
+| 研究者検索 | `https://nrid.nii.ac.jp/ja/search/?qm={query}` |
 
-#### エンドポイント
-
-```
-https://kaken.nii.ac.jp/opensearch/?(parameter=value)&(parameter=value)&...
-```
-
-#### 主要パラメータ（推定）
+### 検索パラメータ
 
 | パラメータ | 説明 | 例 |
 |-----------|------|-----|
-| `appid` | アプリケーションID（必須） | `appid=xxxxxxxx` |
-| `format` | 出力形式（デフォルト: html5） | `format=xml`, `format=json` |
-| `q` | フリーワード検索 | `q=人工知能` |
+| `kw` | フリーワード検索 | `kw=人工知能` |
 | `q1` | 研究課題名 | `q1=機械学習` |
+| `q4` | 研究者名 | `q4=田中` |
+| `q5` | 研究機関 | `q5=東京大学` |
 | `q15` | 研究者番号 | `q15=60273570` |
 | `rw` | 取得件数 | `rw=100` |
-| `st` | 開始位置（ページネーション） | `st=101` |
-
-#### 詳細パラメータドキュメント
-
-- https://bitbucket.org/niijp/kaken_definition/src/master/KAKEN_API_parameters_document_Ja.pdf
-
-### 研究者検索 API
-
-#### エンドポイント
-
-```
-https://nrid.nii.ac.jp/opensearch/?(parameter=value)&(parameter=value)&...
-```
-
-#### 主要パラメータ
-
-| パラメータ | 説明 | 例 |
-|-----------|------|-----|
-| `appid` | アプリケーションID（必須） | `appid=xxxxxxxx` |
-| `format` | 出力形式 | `format=json` |
-| `qm` | 検索クエリ（ワイルドカード対応） | `qm=田中*` |
-| `rw` | 取得件数 | `rw=500` |
-| `st` | 開始位置 | `st=1` |
-
-### レスポンス形式
-
-#### XML形式（OpenSearch標準）
-
-```xml
-<feed>
-  <totalResults>100</totalResults>
-  <startIndex>1</startIndex>
-  <itemsPerPage>20</itemsPerPage>
-  <entry>
-    <title>研究課題名</title>
-    <link href="https://kaken.nii.ac.jp/grant/KAKENHI-PROJECT-XXXXXXXX/"/>
-    <!-- その他の情報 -->
-  </entry>
-</feed>
-```
-
-#### JSON形式
-
-```json
-{
-  "totalResults": 100,
-  "startIndex": 1,
-  "itemsPerPage": 20,
-  "researchers": [
-    {
-      "name": "研究者名",
-      "affiliation": "所属機関"
-    }
-  ]
-}
-```
-
-### RDFデータ
-
-研究課題の詳細情報はRDF形式でも取得可能:
-
-```
-https://kaken.nii.ac.jp/rdf/p/{課題番号}
-```
+| `st` | 開始位置（1-indexed） | `st=101` |
 
 ---
 
@@ -124,15 +63,14 @@ https://kaken.nii.ac.jp/rdf/p/{課題番号}
 
 ### 技術スタック
 
-参考リポジトリ（alt-soracom-data-reader-mcp）に基づく:
-
 | 項目 | 値 |
 |-----|-----|
 | 言語 | Python 3.11+ |
 | パッケージマネージャ | uv |
-| MCPフレームワーク | FastMCP (>=2.13.3) |
-| HTTP クライアント | httpx (>=0.28.0) |
-| 設定管理 | pydantic-settings (>=2.12.0) |
+| MCPフレームワーク | FastMCP (>=2.0.0) |
+| HTTPクライアント | httpx (>=0.28.0) |
+| HTMLパーサー | BeautifulSoup4 (>=4.12.0) + lxml (>=5.0.0) |
+| 設定管理 | pydantic-settings (>=2.0.0) |
 
 ### ディレクトリ構成
 
@@ -140,29 +78,40 @@ https://kaken.nii.ac.jp/rdf/p/{課題番号}
 kaken-mcp/
 ├── pyproject.toml
 ├── README.md
+├── SPECIFICATION.md
+├── LICENSE
 ├── kaken_mcp/
 │   ├── __init__.py
 │   ├── __main__.py          # エントリーポイント
 │   ├── server.py             # MCPサーバー
-│   ├── client.py             # KAKEN APIクライアント
+│   ├── client.py             # KAKENウェブスクレイピングクライアント
 │   ├── config.py             # 設定管理
 │   └── tools/
 │       ├── __init__.py
 │       ├── projects.py       # 研究課題検索ツール
 │       └── researchers.py    # 研究者検索ツール
 └── tests/
-    └── ...
+    ├── __init__.py
+    └── test_client.py
 ```
 
-### 環境変数
+### 設定
 
-| 変数名 | 説明 | 必須 |
-|--------|------|------|
-| `KAKEN_APP_ID` | CiNii APIのApplication ID | ✓ |
+環境変数は不要です。オプションで以下の設定が可能：
 
-### MCPツール一覧
+| 変数名 | 説明 | デフォルト値 |
+|--------|------|-------------|
+| `KAKEN_BASE_URL` | KAKENベースURL | `https://kaken.nii.ac.jp` |
+| `KAKEN_RESEARCHER_BASE_URL` | 研究者検索ベースURL | `https://nrid.nii.ac.jp` |
+| `KAKEN_DEFAULT_LIMIT` | デフォルト取得件数 | `20` |
+| `KAKEN_MAX_LIMIT` | 最大取得件数 | `200` |
+| `KAKEN_REQUEST_TIMEOUT` | リクエストタイムアウト（秒） | `30.0` |
 
-#### 1. search_projects - 研究課題検索
+---
+
+## MCPツール一覧
+
+### 1. search_projects - 研究課題検索
 
 研究課題をキーワードや条件で検索する。
 
@@ -178,7 +127,7 @@ kaken-mcp/
 | `research_field` | string | 研究分野 | - |
 | `fiscal_year_from` | integer | 研究期間（開始年度） | - |
 | `fiscal_year_to` | integer | 研究期間（終了年度） | - |
-| `limit` | integer | 取得件数（デフォルト: 20） | - |
+| `limit` | integer | 取得件数（デフォルト: 20、最大: 200） | - |
 | `offset` | integer | 開始位置（デフォルト: 0） | - |
 
 **出力:**
@@ -188,20 +137,20 @@ kaken-mcp/
   "total_count": 150,
   "projects": [
     {
-      "id": "KAKENHI-PROJECT-XXXXXXXX",
+      "id": "KAKENHI-PROJECT-19H00001",
       "title": "研究課題名",
       "principal_investigator": "代表研究者名",
       "institution": "所属機関",
-      "research_field": "研究分野",
-      "fiscal_year": "2020-2024",
+      "fiscal_year_start": 2019,
+      "fiscal_year_end": 2023,
       "total_budget": 10000000,
-      "url": "https://kaken.nii.ac.jp/grant/KAKENHI-PROJECT-XXXXXXXX/"
+      "url": "https://kaken.nii.ac.jp/ja/grant/KAKENHI-PROJECT-19H00001/"
     }
   ]
 }
 ```
 
-#### 2. get_project_detail - 研究課題詳細取得
+### 2. get_project_detail - 研究課題詳細取得
 
 特定の研究課題の詳細情報を取得する。
 
@@ -209,39 +158,27 @@ kaken-mcp/
 
 | パラメータ | 型 | 説明 | 必須 |
 |-----------|-----|------|------|
-| `project_id` | string | 研究課題番号 | ✓ |
+| `project_id` | string | 研究課題番号（例: "19H00001" または "KAKENHI-PROJECT-19H00001"） | ✓ |
 
 **出力:**
 
 ```json
 {
-  "id": "KAKENHI-PROJECT-XXXXXXXX",
+  "id": "KAKENHI-PROJECT-19H00001",
   "title": "研究課題名",
-  "title_en": "Research Project Title",
-  "principal_investigator": {
-    "name": "代表研究者名",
-    "name_en": "Principal Investigator Name",
-    "researcher_number": "60273570",
-    "institution": "所属機関"
-  },
-  "co_investigators": [...],
-  "research_field": "研究分野",
-  "keywords": ["キーワード1", "キーワード2"],
-  "abstract": "研究概要...",
-  "fiscal_years": {
-    "start": 2020,
-    "end": 2024
-  },
-  "budget": {
-    "total": 10000000,
-    "by_year": {...}
-  },
-  "publications": [...],
-  "url": "https://kaken.nii.ac.jp/grant/KAKENHI-PROJECT-XXXXXXXX/"
+  "research_category": "基盤研究(A)",
+  "principal_investigator": "代表研究者名",
+  "institution": "所属機関",
+  "fiscal_year_start": 2019,
+  "fiscal_year_end": 2023,
+  "total_budget": 10000000,
+  "keywords": ["キーワード1", "キーワード2", "キーワード3"],
+  "summary": "研究概要...",
+  "url": "https://kaken.nii.ac.jp/ja/grant/KAKENHI-PROJECT-19H00001/"
 }
 ```
 
-#### 3. search_researchers - 研究者検索
+### 3. search_researchers - 研究者検索
 
 研究者を検索する。
 
@@ -253,7 +190,7 @@ kaken-mcp/
 | `researcher_number` | string | 研究者番号 | - |
 | `institution` | string | 所属機関 | - |
 | `research_field` | string | 研究分野 | - |
-| `limit` | integer | 取得件数（デフォルト: 20） | - |
+| `limit` | integer | 取得件数（デフォルト: 20、最大: 200） | - |
 | `offset` | integer | 開始位置（デフォルト: 0） | - |
 
 **出力:**
@@ -263,20 +200,16 @@ kaken-mcp/
   "total_count": 50,
   "researchers": [
     {
-      "researcher_number": "60273570",
+      "researcher_number": "1000000000001",
       "name": "研究者名",
-      "name_en": "Researcher Name",
-      "institution": "所属機関",
-      "department": "所属部局",
-      "position": "職名",
-      "research_fields": ["研究分野1", "研究分野2"],
-      "url": "https://nrid.nii.ac.jp/ja/nrid/XXXXXXXX/"
+      "affiliation": "東京大学 情報理工学系研究科",
+      "url": "https://nrid.nii.ac.jp/ja/nrid/1000000000001/"
     }
   ]
 }
 ```
 
-#### 4. get_researcher_projects - 研究者の研究課題一覧
+### 4. get_researcher_projects - 研究者の研究課題一覧
 
 特定の研究者が関わる研究課題一覧を取得する。
 
@@ -285,9 +218,13 @@ kaken-mcp/
 | パラメータ | 型 | 説明 | 必須 |
 |-----------|-----|------|------|
 | `researcher_number` | string | 研究者番号 | ✓ |
-| `role` | string | 役割（代表者/分担者） | - |
-| `limit` | integer | 取得件数 | - |
-| `offset` | integer | 開始位置 | - |
+| `role` | string | 役割フィルタ（"principal" または "co-investigator"） | - |
+| `limit` | integer | 取得件数（デフォルト: 20、最大: 200） | - |
+| `offset` | integer | 開始位置（デフォルト: 0） | - |
+
+**出力:**
+
+`search_projects` と同じ形式
 
 ---
 
@@ -299,11 +236,13 @@ kaken-mcp/
 # uvでインストール
 uv tool install git+https://github.com/leaveanest/kaken-mcp.git
 
-# 実行
-KAKEN_APP_ID=your_app_id kaken-mcp
+# 実行（環境変数不要）
+kaken-mcp
 ```
 
 ### Claude Desktop設定例
+
+`claude_desktop_config.json` に以下を追加:
 
 ```json
 {
@@ -314,39 +253,49 @@ KAKEN_APP_ID=your_app_id kaken-mcp
         "--from",
         "git+https://github.com/leaveanest/kaken-mcp.git",
         "kaken-mcp"
-      ],
-      "env": {
-        "KAKEN_APP_ID": "your_application_id"
-      }
+      ]
     }
   }
 }
+```
+
+### uvxで直接実行
+
+```bash
+uvx --from git+https://github.com/leaveanest/kaken-mcp.git kaken-mcp
 ```
 
 ---
 
 ## 注意事項
 
-### API利用規約
+### 利用上の注意
 
-- 短時間での大量アクセスは禁止
-- 規定に従わないアクセスは予告なくブロックされる可能性あり
-- robots.txtで禁止されているパスへのアクセスは不可
+- 短時間での大量アクセスは避けてください
+- ウェブサイトの構造変更によりパースが失敗する可能性があります
+- robots.txtで禁止されているパスへのアクセスは行いません
 
-### 参考資料
+### 制限事項
 
-- [KAKEN API ドキュメント](https://support.nii.ac.jp/en/kaken/api/api_outline)
-- [CiNii API開発者登録](https://support.nii.ac.jp/ja/cinii/api/developer)
-- [パラメータ定義PDF](https://bitbucket.org/niijp/kaken_definition/src/master/KAKEN_API_parameters_document_Ja.pdf)
+- HTMLパースによるデータ取得のため、ウェブサイトの構造変更に影響を受ける可能性があります
+- 一部のフィールドは取得できない場合があります
+
+---
+
+## 参考資料
+
+- [KAKEN - 科学研究費助成事業データベース](https://kaken.nii.ac.jp/ja/)
+- [KAKEN - 研究者をさがす](https://nrid.nii.ac.jp/ja/)
+- [Model Context Protocol](https://modelcontextprotocol.io/)
 - [参考リポジトリ: alt-soracom-data-reader-mcp](https://github.com/leaveanest/alt-soracom-data-reader-mcp)
 
 ---
 
-## 今後の実装予定
+## 実装状況
 
-1. [ ] 基本的なプロジェクト構造の作成
-2. [ ] KAKEN APIクライアントの実装
-3. [ ] 研究課題検索ツールの実装
-4. [ ] 研究者検索ツールの実装
-5. [ ] テストの作成
-6. [ ] ドキュメントの整備
+- [x] 基本的なプロジェクト構造の作成
+- [x] KAKENウェブスクレイピングクライアントの実装
+- [x] 研究課題検索ツールの実装
+- [x] 研究者検索ツールの実装
+- [x] テストの作成
+- [x] ドキュメントの整備
