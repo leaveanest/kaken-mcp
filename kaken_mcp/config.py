@@ -13,19 +13,19 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    # CiNii API Application ID (required)
-    app_id: str
-
-    # API endpoints
-    project_api_url: str = "https://kaken.nii.ac.jp/opensearch/"
-    researcher_api_url: str = "https://nrid.nii.ac.jp/opensearch/"
+    # Base URLs for KAKEN website
+    base_url: str = "https://kaken.nii.ac.jp"
+    researcher_base_url: str = "https://nrid.nii.ac.jp"
 
     # Default request settings
     default_limit: int = 20
     max_limit: int = 200
     request_timeout: float = 30.0
 
+    # User agent for requests
+    user_agent: str = "KAKEN-MCP/0.1.0 (https://github.com/leaveanest/kaken-mcp)"
+
 
 def get_settings() -> Settings:
     """Get application settings."""
-    return Settings()  # type: ignore[call-arg]
+    return Settings()

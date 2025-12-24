@@ -4,7 +4,7 @@ from typing import Any
 
 from fastmcp import FastMCP
 
-from kaken_mcp.client import KakenApiError, KakenClient
+from kaken_mcp.client import KakenClient, KakenError
 from kaken_mcp.config import Settings
 
 
@@ -66,7 +66,7 @@ def register_project_tools(mcp: FastMCP, settings: Settings) -> None:
                     offset=offset,
                 )
                 return result
-            except KakenApiError as e:
+            except KakenError as e:
                 return {"error": str(e), "total_count": 0, "projects": []}
 
     @mcp.tool()
@@ -93,7 +93,7 @@ def register_project_tools(mcp: FastMCP, settings: Settings) -> None:
             try:
                 result = await client.get_project_detail(project_id)
                 return result
-            except KakenApiError as e:
+            except KakenError as e:
                 return {"error": str(e)}
 
     @mcp.tool()
@@ -128,5 +128,5 @@ def register_project_tools(mcp: FastMCP, settings: Settings) -> None:
                     offset=offset,
                 )
                 return result
-            except KakenApiError as e:
+            except KakenError as e:
                 return {"error": str(e), "total_count": 0, "projects": []}
