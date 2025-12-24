@@ -4,7 +4,7 @@ from typing import Any
 
 from fastmcp import FastMCP
 
-from kaken_mcp.client import KakenClient, KakenApiError
+from kaken_mcp.client import KakenApiError, KakenClient
 from kaken_mcp.config import Settings
 
 
@@ -41,7 +41,7 @@ def register_researcher_tools(mcp: FastMCP, settings: Settings) -> None:
         Returns:
             Dictionary containing:
             - total_count: Total number of matching researchers
-            - researchers: List of researcher summaries with name, researcher_number, affiliation, url
+            - researchers: List of researcher summaries (name, researcher_number, etc.)
         """
         async with KakenClient(settings) as client:
             try:

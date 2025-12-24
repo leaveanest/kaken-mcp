@@ -4,7 +4,7 @@ from typing import Any
 
 from fastmcp import FastMCP
 
-from kaken_mcp.client import KakenClient, KakenApiError
+from kaken_mcp.client import KakenApiError, KakenClient
 from kaken_mcp.config import Settings
 
 
@@ -110,7 +110,7 @@ def register_project_tools(mcp: FastMCP, settings: Settings) -> None:
 
         Args:
             researcher_number: Unique researcher number (required)
-            role: Filter by role - "principal" for lead researcher or "co-investigator" for collaborator
+            role: Filter by role - "principal" (lead) or "co-investigator"
             limit: Maximum number of results to return (default: 20, max: 200)
             offset: Starting position for pagination (default: 0)
 

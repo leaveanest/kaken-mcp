@@ -1,6 +1,6 @@
 """KAKEN API client for accessing research project and researcher data."""
 
-from typing import Any
+from typing import Any, cast
 from xml.etree import ElementTree
 
 import httpx
@@ -131,8 +131,9 @@ class KakenClient:
         response = await self._request(self.settings.project_api_url, params)
         result = self._parse_project_response(response)
 
-        if result["projects"]:
-            return result["projects"][0]
+        projects = cast(list[dict[str, Any]], result["projects"])
+        if projects:
+            return projects[0]
         raise KakenApiError(f"Project not found: {project_id}")
 
     async def search_researchers(
