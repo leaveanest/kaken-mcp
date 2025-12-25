@@ -22,6 +22,11 @@ class Settings(BaseSettings):
     max_limit: int = 200
     request_timeout: float = 30.0
 
+    # Rate limiting and retry settings
+    request_delay: float = 1.0  # Seconds between requests
+    max_retries: int = 3  # Maximum retry attempts for transient failures
+    retry_delay: float = 2.0  # Initial delay between retries (exponential backoff)
+
     # User agent for requests
     user_agent: str = "KAKEN-MCP/0.1.0 (https://github.com/leaveanest/kaken-mcp)"
 

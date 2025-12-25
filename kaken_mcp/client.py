@@ -1,6 +1,8 @@
 """KAKEN client for scraping research project and researcher data from website."""
 
+import asyncio
 import re
+import time
 from typing import Any
 
 import httpx
@@ -11,8 +13,6 @@ from kaken_mcp.config import Settings
 
 class KakenError(Exception):
     """Exception raised when KAKEN request fails."""
-
-    pass
 
 
 class KakenClient:
@@ -35,6 +35,7 @@ class KakenClient:
             },
             follow_redirects=True,
         )
+        self._last_request_time: float = 0.0
 
     async def close(self) -> None:
         """Close the HTTP client."""
@@ -235,7 +236,7 @@ class KakenClient:
     async def _request(
         self, url: str, params: dict[str, str] | None = None
     ) -> str:
-        """Make an HTTP request.
+        """Make an HTTP request with rate limiting and retry logic.
 
         Args:
             url: URL to request
@@ -245,16 +246,40 @@ class KakenClient:
             Response HTML text
 
         Raises:
-            KakenError: If the request fails
+            KakenError: If the request fails after all retries
         """
-        try:
-            response = await self._client.get(url, params=params)
-            response.raise_for_status()
-            return response.text
-        except httpx.HTTPStatusError as e:
-            raise KakenError(f"Request failed with status {e.response.status_code}") from e
-        except httpx.RequestError as e:
-            raise KakenError(f"Request failed: {e}") from e
+        # Rate limiting - wait if necessary
+        elapsed = time.time() - self._last_request_time
+        if elapsed < self.settings.request_delay:
+            await asyncio.sleep(self.settings.request_delay - elapsed)
+
+        last_error: Exception | None = None
+        for attempt in range(self.settings.max_retries):
+            try:
+                response = await self._client.get(url, params=params)
+                response.raise_for_status()
+                self._last_request_time = time.time()
+                return response.text
+            except httpx.HTTPStatusError as e:
+                # Don't retry client errors (4xx)
+                if 400 <= e.response.status_code < 500:
+                    raise KakenError(
+                        f"Request failed with status {e.response.status_code}"
+                    ) from e
+                last_error = e
+            except httpx.RequestError as e:
+                last_error = e
+
+            # Exponential backoff for retries
+            if attempt < self.settings.max_retries - 1:
+                delay = self.settings.retry_delay * (2**attempt)
+                await asyncio.sleep(delay)
+
+        # All retries exhausted
+        if last_error:
+            msg = f"Request failed after {self.settings.max_retries} retries: {last_error}"
+            raise KakenError(msg) from last_error
+        raise KakenError("Request failed with unknown error")
 
     def _parse_search_results(self, html: str) -> dict[str, Any]:
         """Parse search results HTML.
@@ -522,45 +547,3 @@ class KakenClient:
             "total_count": total_count,
             "researchers": researchers,
         }
-
-    def _parse_researcher_from_list(self, element: Tag) -> dict[str, Any] | None:
-        """Parse a single researcher entry from search results.
-
-        Args:
-            element: BeautifulSoup element containing researcher info
-
-        Returns:
-            Researcher data as dictionary or None if parsing fails
-        """
-        researcher: dict[str, Any] = {}
-
-        # Find name and URL
-        name_link = element.find("a", href=re.compile(r"/nrid/"))
-        if name_link:
-            researcher["name"] = name_link.get_text(strip=True)
-            href_attr = name_link.get("href", "")
-            href = str(href_attr) if href_attr else ""
-            if href:
-                if href.startswith("/"):
-                    researcher["url"] = f"{self.settings.researcher_base_url}{href}"
-                else:
-                    researcher["url"] = href
-                # Extract researcher number from URL
-                match = re.search(r"/nrid/(\d+)", href)
-                if match:
-                    researcher["researcher_number"] = match.group(1)
-
-        if not researcher.get("name"):
-            return None
-
-        # Find affiliation info
-        text = element.get_text()
-        # Try to extract institution from text
-        inst_match = re.search(r"(大学|研究所|研究機構|センター|機構)", text)
-        if inst_match:
-            # Get surrounding context
-            start = max(0, inst_match.start() - 20)
-            end = min(len(text), inst_match.end() + 10)
-            researcher["affiliation"] = text[start:end].strip()
-
-        return researcher
