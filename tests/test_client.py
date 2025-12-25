@@ -48,13 +48,15 @@ def sample_detail_html() -> str:
     <body>
         <main>
             <h1>人工知能を用いた研究課題分析</h1>
-            <p>研究種目: 基盤研究(A)</p>
-            <p>研究代表者: 山田太郎 (東京大学)</p>
-            <p>研究機関: 東京大学</p>
-            <p>研究期間 (年度): 2019 – 2023</p>
-            <p>配分額: ¥10,000,000</p>
-            <p>キーワード: 人工知能 / 機械学習 / データ分析</p>
-            <p>研究概要: 本研究では人工知能技術を用いて研究課題を分析し...</p>
+            <table>
+                <tr><th>研究種目</th><td>基盤研究(A)</td></tr>
+                <tr><th>研究代表者</th><td>山田太郎 東京大学, 教授</td></tr>
+                <tr><th>研究機関</th><td>東京大学</td></tr>
+                <tr><th>研究期間 (年度)</th><td>2019-04-01 – 2023-03-31</td></tr>
+                <tr><th>配分額</th><td>10,000千円 (直接経費: 8,000千円)</td></tr>
+                <tr><th>キーワード</th><td>人工知能 / 機械学習 / データ分析</td></tr>
+                <tr><th>研究概要</th><td>本研究では人工知能技術を用いて研究課題を分析し...</td></tr>
+            </table>
         </main>
     </body>
     </html>
@@ -69,9 +71,11 @@ def sample_researcher_html() -> str:
     <html>
     <head><title>KAKEN — 研究者検索結果</title></head>
     <body>
-        <div class="result-count"><strong>150</strong>件</div>
+        <div>検索結果: 150件 / 山田</div>
         <div class="search-result-item">
-            <h3><a href="/ja/nrid/1000000000001/">山田太郎</a></h3>
+            <h3 class="item_mainTitle">
+                <div class="title"><a href="/ja/nrid/1000000000001/">山田 太郎  Yamada Taro  (00000001)</a></div>
+            </h3>
             <p>東京大学 情報理工学系研究科 教授</p>
         </div>
     </body>
@@ -152,8 +156,8 @@ class TestKakenClient:
 
             assert result["total_count"] == 150
             assert len(result["researchers"]) == 1
-            assert result["researchers"][0]["name"] == "山田太郎"
-            assert result["researchers"][0]["researcher_number"] == "1000000000001"
+            assert result["researchers"][0]["name"] == "山田 太郎"
+            assert result["researchers"][0]["researcher_number"] == "000000001"
 
     async def test_get_researcher_projects_with_role(
         self, settings: Settings, sample_search_html: str
@@ -214,7 +218,9 @@ class TestParseProjectDetail:
         <!DOCTYPE html>
         <html><body><main>
             <h1>テスト研究</h1>
-            <p>キーワード: AI / 機械学習 / データ</p>
+            <table>
+                <tr><th>キーワード</th><td>AI / 機械学習 / データ</td></tr>
+            </table>
         </main></body></html>
         """
         result = client._parse_project_detail(html, "12345678")
@@ -228,7 +234,9 @@ class TestParseProjectDetail:
         <!DOCTYPE html>
         <html><body><main>
             <h1>テスト研究</h1>
-            <p>配分額: ¥15,000,000</p>
+            <table>
+                <tr><th>配分額</th><td>15,000千円 (直接経費: 12,000千円)</td></tr>
+            </table>
         </main></body></html>
         """
         result = client._parse_project_detail(html, "12345678")

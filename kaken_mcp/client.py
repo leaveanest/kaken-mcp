@@ -31,6 +31,7 @@ class KakenClient:
                 "User-Agent": settings.user_agent,
                 "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
                 "Accept-Language": "ja,en;q=0.9",
+                "Accept-Encoding": "gzip, deflate, br",
             },
             follow_redirects=True,
         )
@@ -97,15 +98,23 @@ class KakenClient:
         if fiscal_year_to:
             params["q8"] = str(fiscal_year_to)
 
-        # Pagination
-        actual_limit = min(limit or self.settings.default_limit, self.settings.max_limit)
+        # Pagination - KAKEN requires minimum 20 results per page
+        requested_limit = limit or self.settings.default_limit
+        # Request at least 20 to avoid empty responses from KAKEN
+        actual_limit = max(20, min(requested_limit, self.settings.max_limit))
         params["rw"] = str(actual_limit)
         if offset > 0:
             params["st"] = str(offset + 1)
 
         url = f"{self.settings.base_url}/ja/search/"
         html = await self._request(url, params)
-        return self._parse_search_results(html)
+        result = self._parse_search_results(html)
+
+        # Slice results if user requested fewer than 20
+        if requested_limit < len(result["projects"]):
+            result["projects"] = result["projects"][:requested_limit]
+
+        return result
 
     async def get_project_detail(self, project_id: str) -> dict[str, Any]:
         """Get detailed information for a specific research project.
@@ -149,7 +158,7 @@ class KakenClient:
         """
         params: dict[str, str] = {}
 
-        # Build query
+        # Build query using kw parameter
         query_parts: list[str] = []
         if name:
             query_parts.append(name)
@@ -159,19 +168,26 @@ class KakenClient:
             query_parts.append(research_field)
 
         if query_parts:
-            params["qm"] = " ".join(query_parts)
+            params["kw"] = " ".join(query_parts)
         if researcher_number:
             params["qn"] = researcher_number
 
-        # Pagination
-        actual_limit = min(limit or self.settings.default_limit, self.settings.max_limit)
+        # Pagination - NRID requires minimum 20 results per page
+        requested_limit = limit or self.settings.default_limit
+        actual_limit = max(20, min(requested_limit, self.settings.max_limit))
         params["rw"] = str(actual_limit)
         if offset > 0:
             params["st"] = str(offset + 1)
 
         url = f"{self.settings.researcher_base_url}/ja/search/"
         html = await self._request(url, params)
-        return self._parse_researcher_results(html)
+        result = self._parse_researcher_results(html)
+
+        # Slice results if user requested fewer than 20
+        if requested_limit < len(result["researchers"]):
+            result["researchers"] = result["researchers"][:requested_limit]
+
+        return result
 
     async def get_researcher_projects(
         self,
@@ -199,14 +215,22 @@ class KakenClient:
             elif role.lower() in ["co-investigator", "分担者", "研究分担者"]:
                 params["q13"] = "2"
 
-        actual_limit = min(limit or self.settings.default_limit, self.settings.max_limit)
+        # Pagination - KAKEN requires minimum 20 results per page
+        requested_limit = limit or self.settings.default_limit
+        actual_limit = max(20, min(requested_limit, self.settings.max_limit))
         params["rw"] = str(actual_limit)
         if offset > 0:
             params["st"] = str(offset + 1)
 
         url = f"{self.settings.base_url}/ja/search/"
         html = await self._request(url, params)
-        return self._parse_search_results(html)
+        result = self._parse_search_results(html)
+
+        # Slice results if user requested fewer than 20
+        if requested_limit < len(result["projects"]):
+            result["projects"] = result["projects"][:requested_limit]
+
+        return result
 
     async def _request(
         self, url: str, params: dict[str, str] | None = None
@@ -244,14 +268,25 @@ class KakenClient:
         soup = BeautifulSoup(html, "lxml")
         projects: list[dict[str, Any]] = []
 
-        # Find total count
+        # Find total count - try multiple patterns
         total_count = 0
-        count_elem = soup.select_one(".search-result-count, .result-count, strong")
-        if count_elem:
-            count_text = count_elem.get_text()
-            numbers = re.findall(r"[\d,]+", count_text)
-            if numbers:
-                total_count = int(numbers[0].replace(",", ""))
+
+        # Pattern 1: "検索結果: X件" format
+        for text in soup.find_all(string=re.compile(r"[\d,]+件")):
+            text_str = str(text)
+            match = re.search(r"([\d,]+)件", text_str)
+            if match:
+                total_count = int(match.group(1).replace(",", ""))
+                break
+
+        # Pattern 2: Class-based selectors (fallback)
+        if total_count == 0:
+            count_elem = soup.select_one(".search-result-count, .result-count, strong")
+            if count_elem:
+                count_text = count_elem.get_text()
+                numbers = re.findall(r"[\d,]+", count_text)
+                if numbers:
+                    total_count = int(numbers[0].replace(",", ""))
 
         # Parse each project entry
         # Try multiple selectors for different page structures
@@ -351,60 +386,64 @@ class KakenClient:
         }
 
         # Title
-        title_elem = soup.find("h1") or soup.find("title")
+        title_elem = soup.find("h1")
         if title_elem:
             title_text = title_elem.get_text(strip=True)
             # Remove "KAKEN — " prefix if present
             title_text = re.sub(r"^KAKEN\s*[—–-]\s*", "", title_text)
             project["title"] = title_text
 
-        # Get all text content for parsing
-        main_content = soup.find("main") or soup.find("article") or soup.body
-        if not main_content:
-            return project
+        # Parse table rows (th: label, td: value)
+        field_mapping = {
+            "研究種目": "research_category",
+            "研究機関": "institution",
+            "研究代表者": "principal_investigator",
+            "研究期間": "fiscal_years",
+            "配分額": "budget_text",
+            "キーワード": "keywords_text",
+            "研究概要": "summary",
+            "研究開始時の研究の概要": "summary",
+            "審査区分": "review_section",
+            "研究分野": "research_field",
+            "研究課題ステータス": "status",
+        }
 
-        full_text = main_content.get_text()
+        for row in soup.find_all("tr"):
+            th = row.find("th")
+            td = row.find("td")
+            if th and td:
+                label = th.get_text(strip=True)
+                value = td.get_text(strip=True)
 
-        # Research category
-        category_match = re.search(r"研究種目[：:]\s*(.+?)(?:\n|$)", full_text)
-        if category_match:
-            project["research_category"] = category_match.group(1).strip()
-
-        # Principal investigator
-        pi_match = re.search(r"研究代表者[：:]\s*(.+?)(?:\s+\(|$|\n)", full_text)
-        if pi_match:
-            project["principal_investigator"] = pi_match.group(1).strip()
-
-        # Institution
-        inst_match = re.search(r"研究機関[：:]\s*(.+?)(?:\n|$)", full_text)
-        if inst_match:
-            project["institution"] = inst_match.group(1).strip()
-
-        # Research period
-        period_pattern = r"研究期間[^：:]*[：:]\s*(\d{4})[^\d]*[-–～~][^\d]*(\d{4})?"
-        period_match = re.search(period_pattern, full_text)
-        if period_match:
-            project["fiscal_year_start"] = int(period_match.group(1))
-            if period_match.group(2):
-                project["fiscal_year_end"] = int(period_match.group(2))
-
-        # Budget
-        budget_match = re.search(r"配分額[^：:]*[：:]\s*[¥￥]?\s*([\d,]+)", full_text)
-        if budget_match:
-            project["total_budget"] = int(budget_match.group(1).replace(",", ""))
-
-        # Keywords
-        keywords_match = re.search(r"キーワード[：:]\s*(.+?)(?:\n|研究)", full_text)
-        if keywords_match:
-            keywords_text = keywords_match.group(1)
-            keywords = [k.strip() for k in re.split(r"[/／、,]", keywords_text)]
-            project["keywords"] = [k for k in keywords if k]
-
-        # Research summary/abstract
-        summary_pattern = r"研究概要[^：:]*[：:]\s*(.+?)(?:キーワード|研究成果|$)"
-        summary_match = re.search(summary_pattern, full_text, re.DOTALL)
-        if summary_match:
-            project["summary"] = summary_match.group(1).strip()[:1000]
+                # Match label to field
+                for key_pattern, field_name in field_mapping.items():
+                    if key_pattern in label:
+                        if field_name == "keywords_text":
+                            # Parse keywords
+                            keywords = [k.strip() for k in re.split(r"[/／、,]", value)]
+                            project["keywords"] = [k for k in keywords if k]
+                        elif field_name == "budget_text":
+                            # Parse budget - extract total amount
+                            budget_match = re.search(r"([\d,]+)千円", value)
+                            if budget_match:
+                                # Convert from thousands to yen
+                                project["total_budget"] = (
+                                    int(budget_match.group(1).replace(",", "")) * 1000
+                                )
+                        elif field_name == "fiscal_years":
+                            # Parse fiscal years
+                            project["fiscal_years"] = value
+                            year_match = re.search(r"(\d{4})", value)
+                            if year_match:
+                                project["fiscal_year_start"] = int(year_match.group(1))
+                            end_match = re.search(r"[–-]\s*(\d{4})", value)
+                            if end_match:
+                                project["fiscal_year_end"] = int(end_match.group(1))
+                        elif field_name == "summary":
+                            project["summary"] = value[:1000]
+                        else:
+                            project[field_name] = value
+                        break
 
         return project
 
@@ -420,29 +459,64 @@ class KakenClient:
         soup = BeautifulSoup(html, "lxml")
         researchers: list[dict[str, Any]] = []
 
-        # Find total count
+        # Find total count - "検索結果: X件" format
         total_count = 0
-        count_elem = soup.select_one(".search-result-count, .result-count, strong")
-        if count_elem:
-            count_text = count_elem.get_text()
-            numbers = re.findall(r"[\d,]+", count_text)
-            if numbers:
-                total_count = int(numbers[0].replace(",", ""))
+        for text in soup.find_all(string=re.compile(r"[\d,]+件")):
+            text_str = str(text)
+            match = re.search(r"([\d,]+)件", text_str)
+            if match:
+                total_count = int(match.group(1).replace(",", ""))
+                break
 
-        # Parse researcher entries
-        entries = soup.select(".search-result-item, .result-item, article")
+        # Parse researcher entries - look for links to /nrid/ pages
+        seen_ids: set[str] = set()
+        for link in soup.find_all("a", href=re.compile(r"/nrid/")):
+            href = str(link.get("href", ""))
+            # Extract researcher number from URL
+            nrid_match = re.search(r"/nrid/(\d+)/", href)
+            if not nrid_match:
+                continue
 
-        if not entries:
-            # Fallback: look for links to researcher pages
-            for link in soup.find_all("a", href=re.compile(r"/nrid/")):
-                researcher = self._parse_researcher_from_list(link.parent or link)
-                if researcher:
-                    researchers.append(researcher)
-        else:
-            for entry in entries:
-                researcher = self._parse_researcher_from_list(entry)
-                if researcher:
-                    researchers.append(researcher)
+            researcher_number = nrid_match.group(1)
+            # Remove leading 1000 prefix if present
+            if researcher_number.startswith("1000"):
+                researcher_number = researcher_number[4:]
+
+            # Skip duplicates
+            if researcher_number in seen_ids:
+                continue
+            seen_ids.add(researcher_number)
+
+            # Get researcher name from link text
+            # Format: "山田 太郎  Yamada Taro  (12345678)"
+            name_text = link.get_text(strip=True)
+
+            # Extract Japanese name - characters before romanization
+            # Japanese name ends where ASCII letters begin
+            jp_name_match = re.match(r"([\u3000-\u9fff\s]+)", name_text)
+            if jp_name_match:
+                name = jp_name_match.group(1).strip()
+            else:
+                # Fallback: take first two space-separated parts
+                parts = name_text.split()
+                name = " ".join(parts[:2]) if len(parts) >= 2 else parts[0]
+
+            researcher: dict[str, Any] = {
+                "researcher_number": researcher_number,
+                "name": name,
+                "url": f"{self.settings.researcher_base_url}{href}",
+            }
+
+            # Try to get affiliation from parent elements
+            parent = link.find_parent("li") or link.find_parent("div")
+            if parent:
+                parent_text = parent.get_text(" ", strip=True)
+                # Look for affiliation pattern after the name
+                aff_match = re.search(r"(?:所属|機関)[：:]?\s*(.+?)(?:\s|$)", parent_text)
+                if aff_match:
+                    researcher["affiliation"] = aff_match.group(1)
+
+            researchers.append(researcher)
 
         return {
             "total_count": total_count,
