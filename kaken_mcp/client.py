@@ -85,19 +85,19 @@ class KakenClient:
         if keyword:
             params["kw"] = keyword
         if title:
-            params["q1"] = title
+            params["qa"] = title
         if researcher_name:
-            params["q4"] = researcher_name
+            params["qg"] = researcher_name
         if researcher_number:
-            params["q15"] = researcher_number
+            params["qm"] = researcher_number
         if institution:
-            params["q5"] = institution
+            params["qe"] = institution
         if research_field:
-            params["q2"] = research_field
+            params["qd"] = research_field
         if fiscal_year_from:
-            params["q7"] = str(fiscal_year_from)
+            params["qk"] = str(fiscal_year_from)
         if fiscal_year_to:
-            params["q8"] = str(fiscal_year_to)
+            params["ql"] = str(fiscal_year_to)
 
         # Pagination - KAKEN requires minimum 20 results per page
         requested_limit = limit or self.settings.default_limit
@@ -208,13 +208,13 @@ class KakenClient:
         Returns:
             Dictionary containing search results
         """
-        params: dict[str, str] = {"q15": researcher_number}
+        params: dict[str, str] = {"qm": researcher_number}
 
         if role:
             if role.lower() in ["principal", "代表者", "研究代表者"]:
-                params["q13"] = "1"
+                params["c2[]"] = "principal_investigator"
             elif role.lower() in ["co-investigator", "分担者", "研究分担者"]:
-                params["q13"] = "2"
+                params["c2[]"] = "co_investigator_buntan"
 
         # Pagination - KAKEN requires minimum 20 results per page
         requested_limit = limit or self.settings.default_limit
