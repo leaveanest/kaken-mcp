@@ -67,6 +67,19 @@ kaken-mcp
 }
 ```
 
+### Codex での設定
+
+`~/.codex/config.toml` に以下を追加:
+
+```toml
+[mcp_servers.kaken]
+command = "uvx"
+args = ["--from", "git+https://github.com/leaveanest/kaken-mcp.git", "kaken-mcp"]
+startup_timeout_sec = 30
+tool_timeout_sec = 120
+enabled = true
+```
+
 ## ツール詳細
 
 ### search_projects

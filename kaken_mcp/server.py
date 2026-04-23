@@ -37,7 +37,7 @@ All searches require a valid CiNii Application ID configured via KAKEN_APP_ID en
 def main() -> None:
     """Main entry point for the MCP server."""
     server = create_server()
-    server.run()
+    server.run(show_banner=False)
 
 
 if __name__ == "__main__":

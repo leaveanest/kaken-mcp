@@ -4,7 +4,6 @@ from typing import Any
 
 from fastmcp import FastMCP
 
-from kaken_mcp.client import KakenClient, KakenError
 from kaken_mcp.config import Settings
 
 
@@ -51,6 +50,8 @@ def register_project_tools(mcp: FastMCP, settings: Settings) -> None:
             - total_count: Total number of matching projects
             - projects: List of project summaries with id, title, principal_investigator, url
         """
+        from kaken_mcp.client import KakenClient, KakenError
+
         async with KakenClient(settings) as client:
             try:
                 result = await client.search_projects(
@@ -89,6 +90,8 @@ def register_project_tools(mcp: FastMCP, settings: Settings) -> None:
             - keywords: Research keywords
             - url: Link to the project page on KAKEN website
         """
+        from kaken_mcp.client import KakenClient, KakenError
+
         async with KakenClient(settings) as client:
             try:
                 result = await client.get_project_detail(project_id)
@@ -119,6 +122,8 @@ def register_project_tools(mcp: FastMCP, settings: Settings) -> None:
             - total_count: Total number of matching projects
             - projects: List of project summaries
         """
+        from kaken_mcp.client import KakenClient, KakenError
+
         async with KakenClient(settings) as client:
             try:
                 result = await client.get_researcher_projects(

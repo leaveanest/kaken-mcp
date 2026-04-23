@@ -290,7 +290,7 @@ class KakenClient:
         Returns:
             Parsed results as dictionary
         """
-        soup = BeautifulSoup(html, "lxml")
+        soup = BeautifulSoup(html, "html.parser")
         projects: list[dict[str, Any]] = []
 
         # Find total count - try multiple patterns
@@ -404,7 +404,7 @@ class KakenClient:
         Returns:
             Parsed project details as dictionary
         """
-        soup = BeautifulSoup(html, "lxml")
+        soup = BeautifulSoup(html, "html.parser")
         project: dict[str, Any] = {
             "id": f"KAKENHI-PROJECT-{project_id}",
             "url": f"{self.settings.base_url}/ja/grant/KAKENHI-PROJECT-{project_id}/",
@@ -481,7 +481,7 @@ class KakenClient:
         Returns:
             Parsed results as dictionary
         """
-        soup = BeautifulSoup(html, "lxml")
+        soup = BeautifulSoup(html, "html.parser")
         researchers: list[dict[str, Any]] = []
 
         # Find total count - "検索結果: X件" format
