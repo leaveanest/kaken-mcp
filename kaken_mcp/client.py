@@ -34,6 +34,7 @@ class KakenClient:
                 "Accept-Encoding": "gzip, deflate, br",
             },
             follow_redirects=True,
+            trust_env=False,
         )
         self._last_request_time: float = 0.0
 
