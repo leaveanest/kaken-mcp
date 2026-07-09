@@ -25,22 +25,34 @@ class KakenClient:
             settings: Application settings
         """
         self.settings = settings
-        self._client = httpx.AsyncClient(
-            timeout=settings.request_timeout,
-            headers={
-                "User-Agent": settings.user_agent,
-                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-                "Accept-Language": "ja,en;q=0.9",
-                "Accept-Encoding": "gzip, deflate, br",
-            },
-            follow_redirects=True,
-            trust_env=False,
-        )
-        self._last_request_time: float = 0.0
+        self._client: httpx.AsyncClient | None = None
+        self._rate_limit_lock = asyncio.Lock()
+        self._next_request_at: float = 0.0
+
+    def _http_client(self) -> httpx.AsyncClient:
+        """Return the HTTP client, (re)creating it if absent or closed.
+
+        Recreation matters when the server lifespan closes the shared client
+        and the same server instance is started again (e.g. a new session).
+        """
+        if self._client is None or self._client.is_closed:
+            self._client = httpx.AsyncClient(
+                timeout=self.settings.request_timeout,
+                headers={
+                    "User-Agent": self.settings.user_agent,
+                    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                    "Accept-Language": "ja,en;q=0.9",
+                    "Accept-Encoding": "gzip, deflate, br",
+                },
+                follow_redirects=True,
+                trust_env=False,
+            )
+        return self._client
 
     async def close(self) -> None:
         """Close the HTTP client."""
-        await self._client.aclose()
+        if self._client is not None and not self._client.is_closed:
+            await self._client.aclose()
 
     async def __aenter__(self) -> "KakenClient":
         """Async context manager entry."""
@@ -128,9 +140,10 @@ class KakenClient:
             Dictionary containing project details
         """
         # Extract numeric ID if full format is provided
-        numeric_id = project_id
-        if "KAKENHI-PROJECT-" in project_id:
-            numeric_id = project_id.replace("KAKENHI-PROJECT-", "")
+        numeric_id = project_id.removeprefix("KAKENHI-PROJECT-")
+        if not re.fullmatch(r"[0-9A-Za-z]+", numeric_id):
+            msg = f"Invalid project ID: {project_id!r}"
+            raise KakenError(msg)
 
         url = f"{self.settings.base_url}/ja/grant/KAKENHI-PROJECT-{numeric_id}/"
         html = await self._request(url)
@@ -234,6 +247,20 @@ class KakenClient:
 
         return result
 
+    async def _throttle(self) -> None:
+        """Reserve the next request slot so requests are spaced by request_delay.
+
+        Safe under concurrent tool calls: each caller reserves its own start
+        time inside the lock, then sleeps outside it.
+        """
+        async with self._rate_limit_lock:
+            now = time.monotonic()
+            start_at = max(now, self._next_request_at)
+            self._next_request_at = start_at + self.settings.request_delay
+        delay = start_at - now
+        if delay > 0:
+            await asyncio.sleep(delay)
+
     async def _request(
         self, url: str, params: dict[str, str] | None = None
     ) -> str:
@@ -249,17 +276,12 @@ class KakenClient:
         Raises:
             KakenError: If the request fails after all retries
         """
-        # Rate limiting - wait if necessary
-        elapsed = time.time() - self._last_request_time
-        if elapsed < self.settings.request_delay:
-            await asyncio.sleep(self.settings.request_delay - elapsed)
-
         last_error: Exception | None = None
         for attempt in range(self.settings.max_retries):
+            await self._throttle()
             try:
-                response = await self._client.get(url, params=params)
+                response = await self._http_client().get(url, params=params)
                 response.raise_for_status()
-                self._last_request_time = time.time()
                 return response.text
             except httpx.HTTPStatusError as e:
                 # Don't retry client errors (4xx)

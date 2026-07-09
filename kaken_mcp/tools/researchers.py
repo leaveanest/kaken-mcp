@@ -4,15 +4,15 @@ from typing import Any
 
 from fastmcp import FastMCP
 
-from kaken_mcp.config import Settings
+from kaken_mcp.client import KakenClient, KakenError
 
 
-def register_researcher_tools(mcp: FastMCP, settings: Settings) -> None:
+def register_researcher_tools(mcp: FastMCP, client: KakenClient) -> None:
     """Register researcher-related tools.
 
     Args:
         mcp: FastMCP server instance
-        settings: Application settings
+        client: Shared KAKEN client used by all tools
     """
 
     @mcp.tool()
@@ -42,18 +42,14 @@ def register_researcher_tools(mcp: FastMCP, settings: Settings) -> None:
             - total_count: Total number of matching researchers
             - researchers: List of researcher summaries (name, researcher_number, etc.)
         """
-        from kaken_mcp.client import KakenClient, KakenError
-
-        async with KakenClient(settings) as client:
-            try:
-                result = await client.search_researchers(
-                    name=name,
-                    researcher_number=researcher_number,
-                    institution=institution,
-                    research_field=research_field,
-                    limit=limit,
-                    offset=offset,
-                )
-                return result
-            except KakenError as e:
-                return {"error": str(e), "total_count": 0, "researchers": []}
+        try:
+            return await client.search_researchers(
+                name=name,
+                researcher_number=researcher_number,
+                institution=institution,
+                research_field=research_field,
+                limit=limit,
+                offset=offset,
+            )
+        except KakenError as e:
+            return {"error": str(e), "total_count": 0, "researchers": []}

@@ -1,10 +1,12 @@
 """Tests for KAKEN client."""
 
+import asyncio
+import time
 from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from kaken_mcp.client import KakenClient
+from kaken_mcp.client import KakenClient, KakenError
 from kaken_mcp.config import Settings
 
 
@@ -179,6 +181,66 @@ class TestKakenClient:
             params = call_args[1]["params"]
             assert params["qm"] == "12345678"
             assert params["c2[]"] == "principal_investigator"
+
+
+class TestRateLimiting:
+    """Tests for request rate limiting."""
+
+    async def test_serializes_concurrent_requests(self) -> None:
+        """Concurrent requests through one client are spaced by request_delay."""
+        settings = Settings(request_delay=0.2)
+        with patch("httpx.AsyncClient.get") as mock_get:
+            mock_response = AsyncMock()
+            mock_response.text = "<html></html>"
+            mock_response.raise_for_status = lambda: None
+            mock_get.return_value = mock_response
+
+            async with KakenClient(settings) as client:
+                start = time.monotonic()
+                await asyncio.gather(
+                    client._request("https://kaken.example/"),
+                    client._request("https://kaken.example/"),
+                    client._request("https://kaken.example/"),
+                )
+                elapsed = time.monotonic() - start
+
+        # Three requests spaced >=0.2s apart need >=0.4s in total
+        assert elapsed >= 0.4
+
+
+class TestProjectIdValidation:
+    """Tests for project ID validation in get_project_detail."""
+
+    async def test_rejects_path_traversal(self, settings: Settings) -> None:
+        """IDs with path separators must not reach the network."""
+        with patch("httpx.AsyncClient.get") as mock_get:
+            async with KakenClient(settings) as client:
+                with pytest.raises(KakenError):
+                    await client.get_project_detail("19H00001/../20K00002")
+            mock_get.assert_not_called()
+
+    async def test_rejects_query_injection(self, settings: Settings) -> None:
+        """IDs with query/fragment characters must not reach the network."""
+        with patch("httpx.AsyncClient.get") as mock_get:
+            async with KakenClient(settings) as client:
+                with pytest.raises(KakenError):
+                    await client.get_project_detail("19H00001?rw=200#x")
+            mock_get.assert_not_called()
+
+    async def test_accepts_prefixed_id(
+        self, settings: Settings, sample_detail_html: str
+    ) -> None:
+        """Full KAKENHI-PROJECT- prefixed IDs keep working."""
+        with patch("httpx.AsyncClient.get") as mock_get:
+            mock_response = AsyncMock()
+            mock_response.text = sample_detail_html
+            mock_response.raise_for_status = lambda: None
+            mock_get.return_value = mock_response
+
+            async with KakenClient(settings) as client:
+                result = await client.get_project_detail("KAKENHI-PROJECT-19H00001")
+
+            assert result["id"] == "KAKENHI-PROJECT-19H00001"
 
 
 class TestParseSearchResults:

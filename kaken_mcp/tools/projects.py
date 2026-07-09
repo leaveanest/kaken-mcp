@@ -4,15 +4,15 @@ from typing import Any
 
 from fastmcp import FastMCP
 
-from kaken_mcp.config import Settings
+from kaken_mcp.client import KakenClient, KakenError
 
 
-def register_project_tools(mcp: FastMCP, settings: Settings) -> None:
+def register_project_tools(mcp: FastMCP, client: KakenClient) -> None:
     """Register project-related tools.
 
     Args:
         mcp: FastMCP server instance
-        settings: Application settings
+        client: Shared KAKEN client used by all tools
     """
 
     @mcp.tool()
@@ -50,25 +50,21 @@ def register_project_tools(mcp: FastMCP, settings: Settings) -> None:
             - total_count: Total number of matching projects
             - projects: List of project summaries with id, title, principal_investigator, url
         """
-        from kaken_mcp.client import KakenClient, KakenError
-
-        async with KakenClient(settings) as client:
-            try:
-                result = await client.search_projects(
-                    keyword=keyword,
-                    title=title,
-                    researcher_name=researcher_name,
-                    researcher_number=researcher_number,
-                    institution=institution,
-                    research_field=research_field,
-                    fiscal_year_from=fiscal_year_from,
-                    fiscal_year_to=fiscal_year_to,
-                    limit=limit,
-                    offset=offset,
-                )
-                return result
-            except KakenError as e:
-                return {"error": str(e), "total_count": 0, "projects": []}
+        try:
+            return await client.search_projects(
+                keyword=keyword,
+                title=title,
+                researcher_name=researcher_name,
+                researcher_number=researcher_number,
+                institution=institution,
+                research_field=research_field,
+                fiscal_year_from=fiscal_year_from,
+                fiscal_year_to=fiscal_year_to,
+                limit=limit,
+                offset=offset,
+            )
+        except KakenError as e:
+            return {"error": str(e), "total_count": 0, "projects": []}
 
     @mcp.tool()
     async def get_project_detail(project_id: str) -> dict[str, Any]:
@@ -90,14 +86,10 @@ def register_project_tools(mcp: FastMCP, settings: Settings) -> None:
             - keywords: Research keywords
             - url: Link to the project page on KAKEN website
         """
-        from kaken_mcp.client import KakenClient, KakenError
-
-        async with KakenClient(settings) as client:
-            try:
-                result = await client.get_project_detail(project_id)
-                return result
-            except KakenError as e:
-                return {"error": str(e)}
+        try:
+            return await client.get_project_detail(project_id)
+        except KakenError as e:
+            return {"error": str(e)}
 
     @mcp.tool()
     async def get_researcher_projects(
@@ -122,16 +114,12 @@ def register_project_tools(mcp: FastMCP, settings: Settings) -> None:
             - total_count: Total number of matching projects
             - projects: List of project summaries
         """
-        from kaken_mcp.client import KakenClient, KakenError
-
-        async with KakenClient(settings) as client:
-            try:
-                result = await client.get_researcher_projects(
-                    researcher_number=researcher_number,
-                    role=role,
-                    limit=limit,
-                    offset=offset,
-                )
-                return result
-            except KakenError as e:
-                return {"error": str(e), "total_count": 0, "projects": []}
+        try:
+            return await client.get_researcher_projects(
+                researcher_number=researcher_number,
+                role=role,
+                limit=limit,
+                offset=offset,
+            )
+        except KakenError as e:
+            return {"error": str(e), "total_count": 0, "projects": []}

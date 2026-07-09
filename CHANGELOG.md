@@ -6,6 +6,9 @@
 
 ### Fixed
 - 検索 URL パラメータを現行 KAKEN サイトのものに更新（`q1`→`qa` 等）。旧パラメータはサイト側で黙って無視されており、`title` などのフィルタが機能していなかった（[#2](https://github.com/leaveanest/kaken-mcp/pull/2) by @anabanted）
+- レート制限が実際には機能していなかった問題を修正。ツール呼び出し毎に `KakenClient` を生成していたためタイマーが毎回リセットされ、並行呼び出しでは同時リクエストになっていた。全ツールで単一クライアントを共有し、ロックでリクエスト開始間隔を直列化（接続プールも再利用されるように）
+- `get_project_detail` の project_id を検証し、パス・クエリを注入できる入力（`../` や `?` を含む ID）を拒否
+- サーバー instructions から、存在しない `KAKEN_APP_ID` 設定を要求する誤った記載を削除
 - `KakenClient` が環境変数のプロキシ設定を拾わないように変更（`trust_env=False`）
 
 ### Changed

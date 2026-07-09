@@ -1,7 +1,11 @@
 """MCP server for KAKEN database."""
 
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+
 from fastmcp import FastMCP
 
+from kaken_mcp.client import KakenClient
 from kaken_mcp.config import get_settings
 from kaken_mcp.tools import register_tools
 
@@ -14,6 +18,17 @@ def create_server() -> FastMCP:
     """
     settings = get_settings()
 
+    # One shared client for all tool calls, so rate limiting and connection
+    # pooling actually apply across requests.
+    client = KakenClient(settings)
+
+    @asynccontextmanager
+    async def lifespan(app: FastMCP) -> AsyncIterator[None]:
+        try:
+            yield
+        finally:
+            await client.close()
+
     mcp = FastMCP(
         name="kaken-mcp",
         instructions="""
@@ -25,11 +40,12 @@ Available tools:
 - search_researchers: Search for researchers by name, affiliation, or research field
 - get_researcher_projects: Get all research projects for a specific researcher
 
-All searches require a valid CiNii Application ID configured via KAKEN_APP_ID environment variable.
+No API key or registration is required; data is fetched from the public KAKEN website.
         """.strip(),
+        lifespan=lifespan,
     )
 
-    register_tools(mcp, settings)
+    register_tools(mcp, client)
 
     return mcp
 
