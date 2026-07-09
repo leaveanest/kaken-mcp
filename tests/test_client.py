@@ -1,9 +1,10 @@
 """Tests for KAKEN client."""
 
-import pytest
 from unittest.mock import AsyncMock, patch
 
-from kaken_mcp.client import KakenClient, KakenError
+import pytest
+
+from kaken_mcp.client import KakenClient
 from kaken_mcp.config import Settings
 
 
@@ -74,7 +75,9 @@ def sample_researcher_html() -> str:
         <div>検索結果: 150件 / 山田</div>
         <div class="search-result-item">
             <h3 class="item_mainTitle">
-                <div class="title"><a href="/ja/nrid/1000000000001/">山田 太郎  Yamada Taro  (00000001)</a></div>
+                <div class="title">
+                    <a href="/ja/nrid/1000000000001/">山田 太郎  Yamada Taro  (00000001)</a>
+                </div>
             </h3>
             <p>東京大学 情報理工学系研究科 教授</p>
         </div>

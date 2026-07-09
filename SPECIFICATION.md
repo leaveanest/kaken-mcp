@@ -43,19 +43,25 @@
 |-----|---------|
 | 研究課題検索 | `https://kaken.nii.ac.jp/ja/search/?kw={keyword}` |
 | 研究課題詳細 | `https://kaken.nii.ac.jp/ja/grant/KAKENHI-PROJECT-{id}/` |
-| 研究者検索 | `https://nrid.nii.ac.jp/ja/search/?qm={query}` |
+| 研究者検索 | `https://nrid.nii.ac.jp/ja/search/?kw={query}` |
 
 ### 検索パラメータ
 
 | パラメータ | 説明 | 例 |
 |-----------|------|-----|
 | `kw` | フリーワード検索 | `kw=人工知能` |
-| `q1` | 研究課題名 | `q1=機械学習` |
-| `q4` | 研究者名 | `q4=田中` |
-| `q5` | 研究機関 | `q5=東京大学` |
-| `q15` | 研究者番号 | `q15=60273570` |
+| `qa` | 研究課題名 | `qa=機械学習` |
+| `qg` | 研究者名 | `qg=田中` |
+| `qe` | 研究機関 | `qe=東京大学` |
+| `qd` | 審査区分・研究分野 | `qd=情報学` |
+| `qk` | 研究期間の開始年度 | `qk=2020` |
+| `ql` | 研究期間の終了年度 | `ql=2023` |
+| `qm` | 研究者番号 | `qm=60273570` |
+| `c2[]` | 役割（研究代表者/分担者） | `c2[]=principal_investigator` |
 | `rw` | 取得件数 | `rw=100` |
 | `st` | 開始位置（1-indexed） | `st=101` |
+
+> 注意: 旧 CGI API のパラメータ（`q1`, `q4`, `q5`, `q15` など）は現行サイトでは黙って無視され、フィルタが効かないまま全件が返る（2026-07-09 実測。詳細は [PR #2](https://github.com/leaveanest/kaken-mcp/pull/2)）。
 
 ---
 

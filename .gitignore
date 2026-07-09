@@ -46,5 +46,11 @@ htmlcov/
 .env
 .env.local
 
+# Claude Code (local agents/settings)
+.claude/
+
+# Local agent run logs
+.agent-runs/
+
 # uv
 uv.lock

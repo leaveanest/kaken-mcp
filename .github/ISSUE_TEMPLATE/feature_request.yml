@@ -1,0 +1,16 @@
+name: 機能要望
+description: 新しい機能や改善の提案
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: 解決したいこと
+      description: どんな場面で、何に困っているか
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: 提案
+      description: どう動いてほしいか。KAKEN サイト側の機能に依存する場合は、該当ページの URL があると助かります

@@ -1,0 +1,23 @@
+name: バグ報告
+description: 動作がおかしい箇所を報告する
+labels: [bug]
+body:
+  - type: textarea
+    id: description
+    attributes:
+      label: 何が起きたか
+      description: 実際の挙動と、期待していた挙動
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: 再現手順
+      description: 使ったツール名と引数（例：search_projects に title="機械学習"）。検索系は返ってきた件数もあると助かります
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: バージョン / 環境
+      description: kaken-mcp のバージョンまたはコミット、Python バージョン、MCP クライアント（Claude Desktop 等）

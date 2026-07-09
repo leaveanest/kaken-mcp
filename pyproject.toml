@@ -14,6 +14,9 @@ classifiers = [
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Operating System :: OS Independent",
+    "Typing :: Typed",
 ]
 
 dependencies = [
@@ -23,7 +26,7 @@ dependencies = [
     "beautifulsoup4>=4.12.0",
 ]
 
-[project.optional-dependencies]
+[dependency-groups]
 dev = [
     "pytest>=8.0.0",
     "pytest-asyncio>=0.24.0",
@@ -37,6 +40,8 @@ kaken-mcp = "kaken_mcp:main"
 [project.urls]
 Homepage = "https://github.com/leaveanest/kaken-mcp"
 Repository = "https://github.com/leaveanest/kaken-mcp"
+Issues = "https://github.com/leaveanest/kaken-mcp/issues"
+Changelog = "https://github.com/leaveanest/kaken-mcp/blob/main/CHANGELOG.md"
 
 [build-system]
 requires = ["hatchling"]

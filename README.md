@@ -1,5 +1,9 @@
 # KAKEN MCP
 
+[![CI](https://github.com/leaveanest/kaken-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/leaveanest/kaken-mcp/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](pyproject.toml)
+
 科学研究費助成事業データベース（KAKEN）にアクセスするためのMCP（Model Context Protocol）サーバー。
 
 ## 概要
@@ -162,6 +166,10 @@ uv run mypy kaken_mcp
 ```bash
 uv run ruff check kaken_mcp
 ```
+
+## コントリビュート
+
+バグ報告・機能要望・PR を歓迎します。始め方は [CONTRIBUTING.md](CONTRIBUTING.md) を見てください。
 
 ## ライセンス
 
