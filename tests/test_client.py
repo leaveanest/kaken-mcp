@@ -174,8 +174,8 @@ class TestKakenClient:
 
             call_args = mock_get.call_args
             params = call_args[1]["params"]
-            assert params["q15"] == "12345678"
-            assert params["q13"] == "1"  # Principal investigator
+            assert params["qm"] == "12345678"
+            assert params["c2[]"] == "principal_investigator"
 
 
 class TestParseSearchResults:
