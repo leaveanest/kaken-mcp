@@ -11,7 +11,8 @@
 KAKEN MCPは、日本の科学研究費助成事業（KAKENHI）データベースから研究課題や研究者の情報を検索・取得するためのMCPサーバーです。LLM（Claude等）から直接KAKENデータベースにアクセスし、研究情報の調査や分析を行うことができます。
 
 **特徴:**
-- API登録不要 - KAKENウェブサイトから直接データを取得
+- KAKEN公式OpenSearch API（研究課題XML・研究者JSON）からデータを取得
+- HTMLスクレイピングに非依存
 - 研究課題・研究者の検索が可能
 - ページネーション対応
 
@@ -25,6 +26,7 @@ KAKEN MCPは、日本の科学研究費助成事業（KAKENHI）データベー�
 ## 必要条件
 
 - Python 3.11以上
+- [CiNiiウェブAPI利用登録](https://support.nii.ac.jp/ja/cinii/api/developer)で発行されたアプリケーションID
 
 ## インストール
 
@@ -46,6 +48,16 @@ pip install git+https://github.com/leaveanest/kaken-mcp.git
 
 ## 使用方法
 
+### アプリケーションIDの設定
+
+KAKEN APIではCiNiiウェブAPI利用登録で発行されたアプリケーションIDが必要です。シェルで次の環境変数を設定してください。
+
+```bash
+export KAKEN_APP_ID="発行されたアプリケーションID"
+```
+
+値はリポジトリへ記録せず、利用環境の秘密管理機能、またはアクセス権を制限したMCP設定で管理してください。
+
 ### MCPサーバーの起動
 
 ```bash
@@ -61,6 +73,9 @@ kaken-mcp
   "mcpServers": {
     "kaken": {
       "command": "uvx",
+      "env": {
+        "KAKEN_APP_ID": "発行されたアプリケーションID"
+      },
       "args": [
         "--from",
         "git+https://github.com/leaveanest/kaken-mcp.git",
@@ -79,6 +94,7 @@ kaken-mcp
 [mcp_servers.kaken]
 command = "uvx"
 args = ["--from", "git+https://github.com/leaveanest/kaken-mcp.git", "kaken-mcp"]
+env = { KAKEN_APP_ID = "発行されたアプリケーションID" }
 startup_timeout_sec = 30
 tool_timeout_sec = 120
 enabled = true
@@ -178,4 +194,7 @@ MIT License
 ## 参考資料
 
 - [KAKEN - 科学研究費助成事業データベース](https://kaken.nii.ac.jp/ja/)
+- [KAKEN APIドキュメント](https://support.nii.ac.jp/ja/kaken/api/api_outline)
+- [KAKEN公開XML定義・APIパラメータ](https://bitbucket.org/niijp/kaken_definition/src/master/)
+- [CiNiiウェブAPI利用登録](https://support.nii.ac.jp/ja/cinii/api/developer)
 - [Model Context Protocol](https://modelcontextprotocol.io/)

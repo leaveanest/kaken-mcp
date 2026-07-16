@@ -5,7 +5,7 @@
 科学研究費助成事業データベース（KAKEN）からデータを検索・取得するためのMCP（Model Context Protocol）サーバー。
 
 **特徴:**
-- API登録不要 - KAKENウェブサイトから直接データを取得（ウェブスクレイピング方式）
+- KAKEN公式OpenSearch APIから取得（HTMLスクレイピング非依存）
 - 研究課題・研究者の検索が可能
 - ページネーション対応
 
@@ -33,17 +33,17 @@
 
 ## データ取得方式
 
-### ウェブスクレイピング
+### KAKEN OpenSearch API
 
-本MCPはKAKENウェブサイトのHTMLを直接パースしてデータを取得します。API登録（APP_ID）は不要です。
+本MCPはKAKEN公式OpenSearch APIを使用します。研究課題はXML、研究者はJSONで取得し、既存MCPツールの返却形式へ正規化します。利用にはCiNiiウェブAPI利用登録で発行されたアプリケーションIDが必要です。
 
 ### 対象URL
 
 | 機能 | URL形式 |
 |-----|---------|
-| 研究課題検索 | `https://kaken.nii.ac.jp/ja/search/?kw={keyword}` |
-| 研究課題詳細 | `https://kaken.nii.ac.jp/ja/grant/KAKENHI-PROJECT-{id}/` |
-| 研究者検索 | `https://nrid.nii.ac.jp/ja/search/?kw={query}` |
+| 研究課題検索 | `https://kaken.nii.ac.jp/opensearch/?format=xml&appid=...` |
+| 研究課題詳細 | 研究課題APIを `qb={project_id}` で検索 |
+| 研究者検索 | `https://nrid.nii.ac.jp/opensearch/?format=json&appid=...` |
 
 ### 検索パラメータ
 
@@ -54,14 +54,14 @@
 | `qg` | 研究者名 | `qg=田中` |
 | `qe` | 研究機関 | `qe=東京大学` |
 | `qd` | 審査区分・研究分野 | `qd=情報学` |
-| `qk` | 研究期間の開始年度 | `qk=2020` |
-| `ql` | 研究期間の終了年度 | `ql=2023` |
+| `s1` | 研究期間の開始年度 | `s1=2020` |
+| `s2` | 研究期間の終了年度 | `s2=2023` |
 | `qm` | 研究者番号 | `qm=60273570` |
-| `c2[]` | 役割（研究代表者/分担者） | `c2[]=principal_investigator` |
+| `c2` | 役割（研究代表者/分担者） | `c2=principal_investigator` |
 | `rw` | 取得件数 | `rw=100` |
 | `st` | 開始位置（1-indexed） | `st=101` |
 
-> 注意: 旧 CGI API のパラメータ（`q1`, `q4`, `q5`, `q15` など）は現行サイトでは黙って無視され、フィルタが効かないまま全件が返る（2026-07-09 実測。詳細は [PR #2](https://github.com/leaveanest/kaken-mcp/pull/2)）。
+`limit` は既存MCP契約上1～200を受け付けます。APIの `rw` は20・50・100・200・500の列挙値であるため、内部では要求件数以上の最小値へ切り上げ、返却時に要求件数へ絞ります。`offset` はMCP側の0-basedからAPIの `st`（1-based）へ変換します。
 
 ---
 
@@ -75,7 +75,8 @@
 | パッケージマネージャ | uv |
 | MCPフレームワーク | FastMCP (>=2.0.0) |
 | HTTPクライアント | httpx (>=0.28.0) |
-| HTMLパーサー | BeautifulSoup4 (>=4.12.0) + lxml (>=5.0.0) |
+| XMLパーサー | Python標準ライブラリ `xml.etree.ElementTree` |
+| JSONパーサー | Python標準ライブラリ `json` |
 | 設定管理 | pydantic-settings (>=2.0.0) |
 
 ### ディレクトリ構成
@@ -90,7 +91,7 @@ kaken-mcp/
 │   ├── __init__.py
 │   ├── __main__.py          # エントリーポイント
 │   ├── server.py             # MCPサーバー
-│   ├── client.py             # KAKENウェブスクレイピングクライアント
+│   ├── client.py             # KAKEN OpenSearch APIクライアント
 │   ├── config.py             # 設定管理
 │   └── tools/
 │       ├── __init__.py
@@ -103,12 +104,15 @@ kaken-mcp/
 
 ### 設定
 
-環境変数は不要です。オプションで以下の設定が可能：
+以下の環境変数を使用します。
 
 | 変数名 | 説明 | デフォルト値 |
 |--------|------|-------------|
-| `KAKEN_BASE_URL` | KAKENベースURL | `https://kaken.nii.ac.jp` |
-| `KAKEN_RESEARCHER_BASE_URL` | 研究者検索ベースURL | `https://nrid.nii.ac.jp` |
+| `KAKEN_APP_ID` | CiNiiウェブAPI利用登録で発行されたアプリケーションID（API呼び出し時に必須） | なし |
+| `KAKEN_BASE_URL` | 返却する研究課題リンクのベースURL | `https://kaken.nii.ac.jp` |
+| `KAKEN_RESEARCHER_BASE_URL` | 返却する研究者リンクのベースURL | `https://nrid.nii.ac.jp` |
+| `KAKEN_PROJECT_API_URL` | 研究課題OpenSearch API URL | `https://kaken.nii.ac.jp/opensearch/` |
+| `KAKEN_RESEARCHER_API_URL` | 研究者OpenSearch API URL | `https://nrid.nii.ac.jp/opensearch/` |
 | `KAKEN_DEFAULT_LIMIT` | デフォルト取得件数 | `20` |
 | `KAKEN_MAX_LIMIT` | 最大取得件数 | `200` |
 | `KAKEN_REQUEST_TIMEOUT` | リクエストタイムアウト（秒） | `30.0` |
@@ -206,10 +210,10 @@ kaken-mcp/
   "total_count": 50,
   "researchers": [
     {
-      "researcher_number": "1000000000001",
+      "researcher_number": "12345678",
       "name": "研究者名",
       "affiliation": "東京大学 情報理工学系研究科",
-      "url": "https://nrid.nii.ac.jp/ja/nrid/1000000000001/"
+      "url": "https://nrid.nii.ac.jp/ja/nrid/1000012345678/"
     }
   ]
 }
@@ -242,7 +246,8 @@ kaken-mcp/
 # uvでインストール
 uv tool install git+https://github.com/leaveanest/kaken-mcp.git
 
-# 実行（環境変数不要）
+# appidを設定して実行
+export KAKEN_APP_ID="発行されたアプリケーションID"
 kaken-mcp
 ```
 
@@ -255,6 +260,9 @@ kaken-mcp
   "mcpServers": {
     "kaken": {
       "command": "uvx",
+      "env": {
+        "KAKEN_APP_ID": "発行されたアプリケーションID"
+      },
       "args": [
         "--from",
         "git+https://github.com/leaveanest/kaken-mcp.git",
@@ -278,12 +286,12 @@ uvx --from git+https://github.com/leaveanest/kaken-mcp.git kaken-mcp
 ### 利用上の注意
 
 - 短時間での大量アクセスは避けてください
-- ウェブサイトの構造変更によりパースが失敗する可能性があります
-- robots.txtで禁止されているパスへのアクセスは行いません
+- `KAKEN_APP_ID` をログ、リポジトリ、Issue、PRへ記録しないでください
+- 公式API定義の更新時はXML・JSON変換の追随が必要です
 
 ### 制限事項
 
-- HTMLパースによるデータ取得のため、ウェブサイトの構造変更に影響を受ける可能性があります
+- KAKEN APIの仕様・レート制限・最大開始位置の制約を受けます
 - 一部のフィールドは取得できない場合があります
 
 ---
@@ -292,6 +300,9 @@ uvx --from git+https://github.com/leaveanest/kaken-mcp.git kaken-mcp
 
 - [KAKEN - 科学研究費助成事業データベース](https://kaken.nii.ac.jp/ja/)
 - [KAKEN - 研究者をさがす](https://nrid.nii.ac.jp/ja/)
+- [KAKEN APIドキュメント](https://support.nii.ac.jp/ja/kaken/api/api_outline)
+- [KAKEN公開XML定義・APIパラメータ](https://bitbucket.org/niijp/kaken_definition/src/master/)
+- [CiNiiウェブAPI利用登録](https://support.nii.ac.jp/ja/cinii/api/developer)
 - [Model Context Protocol](https://modelcontextprotocol.io/)
 - [参考リポジトリ: alt-soracom-data-reader-mcp](https://github.com/leaveanest/alt-soracom-data-reader-mcp)
 
@@ -300,7 +311,7 @@ uvx --from git+https://github.com/leaveanest/kaken-mcp.git kaken-mcp
 ## 実装状況
 
 - [x] 基本的なプロジェクト構造の作成
-- [x] KAKENウェブスクレイピングクライアントの実装
+- [x] KAKEN OpenSearch APIクライアントの実装
 - [x] 研究課題検索ツールの実装
 - [x] 研究者検索ツールの実装
 - [x] テストの作成

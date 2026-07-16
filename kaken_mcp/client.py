@@ -1,48 +1,43 @@
-"""KAKEN client for scraping research project and researcher data from website."""
+"""Asynchronous client for the official KAKEN OpenSearch APIs."""
 
 import asyncio
+import json
 import re
 import time
-from typing import Any
+from collections.abc import Iterable, Mapping
+from typing import Any, cast
+from xml.etree import ElementTree
 
 import httpx
-from bs4 import BeautifulSoup, Tag
 
 from kaken_mcp.config import Settings
 
 
 class KakenError(Exception):
-    """Exception raised when KAKEN request fails."""
+    """Exception raised when a KAKEN API operation fails."""
 
 
 class KakenClient:
-    """Client for scraping KAKEN website."""
+    """Client for the KAKEN project and researcher OpenSearch APIs."""
+
+    _VALID_PAGE_SIZES = (20, 50, 100, 200, 500)
 
     def __init__(self, settings: Settings) -> None:
-        """Initialize the KAKEN client.
-
-        Args:
-            settings: Application settings
-        """
+        """Initialize the client without making a network request."""
         self.settings = settings
         self._client: httpx.AsyncClient | None = None
         self._rate_limit_lock = asyncio.Lock()
-        self._next_request_at: float = 0.0
+        self._next_request_at = 0.0
 
     def _http_client(self) -> httpx.AsyncClient:
-        """Return the HTTP client, (re)creating it if absent or closed.
-
-        Recreation matters when the server lifespan closes the shared client
-        and the same server instance is started again (e.g. a new session).
-        """
+        """Return the shared HTTP client, recreating it after close."""
         if self._client is None or self._client.is_closed:
             self._client = httpx.AsyncClient(
                 timeout=self.settings.request_timeout,
                 headers={
                     "User-Agent": self.settings.user_agent,
-                    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-                    "Accept-Language": "ja,en;q=0.9",
-                    "Accept-Encoding": "gzip, deflate, br",
+                    "Accept": "application/xml, application/json",
+                    "Accept-Language": "ja",
                 },
                 follow_redirects=True,
                 trust_env=False,
@@ -50,16 +45,16 @@ class KakenClient:
         return self._client
 
     async def close(self) -> None:
-        """Close the HTTP client."""
+        """Close the shared HTTP client."""
         if self._client is not None and not self._client.is_closed:
             await self._client.aclose()
 
     async def __aenter__(self) -> "KakenClient":
-        """Async context manager entry."""
+        """Enter an asynchronous context."""
         return self
 
     async def __aexit__(self, *args: Any) -> None:
-        """Async context manager exit."""
+        """Close the client when leaving an asynchronous context."""
         await self.close()
 
     async def search_projects(
@@ -75,79 +70,41 @@ class KakenClient:
         limit: int | None = None,
         offset: int = 0,
     ) -> dict[str, Any]:
-        """Search for research projects by scraping KAKEN website.
-
-        Args:
-            keyword: Free text search keyword
-            title: Research project title
-            researcher_name: Name of researcher
-            researcher_number: Researcher number
-            institution: Research institution name
-            research_field: Research field
-            fiscal_year_from: Start fiscal year
-            fiscal_year_to: End fiscal year
-            limit: Maximum number of results
-            offset: Starting position for pagination
-
-        Returns:
-            Dictionary containing search results with total_count and projects list
-        """
+        """Search research projects and return the legacy normalized shape."""
         params: dict[str, str] = {}
-
-        # Build search query
-        if keyword:
-            params["kw"] = keyword
-        if title:
-            params["qa"] = title
-        if researcher_name:
-            params["qg"] = researcher_name
-        if researcher_number:
-            params["qm"] = researcher_number
-        if institution:
-            params["qe"] = institution
-        if research_field:
-            params["qd"] = research_field
-        if fiscal_year_from:
-            params["qk"] = str(fiscal_year_from)
-        if fiscal_year_to:
-            params["ql"] = str(fiscal_year_to)
-
-        # Pagination - KAKEN requires minimum 20 results per page
-        requested_limit = limit or self.settings.default_limit
-        # Request at least 20 to avoid empty responses from KAKEN
-        actual_limit = max(20, min(requested_limit, self.settings.max_limit))
-        params["rw"] = str(actual_limit)
-        if offset > 0:
-            params["st"] = str(offset + 1)
-
-        url = f"{self.settings.base_url}/ja/search/"
-        html = await self._request(url, params)
-        result = self._parse_search_results(html)
-
-        # Slice results if user requested fewer than 20
-        if requested_limit < len(result["projects"]):
-            result["projects"] = result["projects"][:requested_limit]
-
-        return result
+        self._set_if_value(params, "kw", keyword)
+        self._set_if_value(params, "qa", title)
+        self._set_if_value(params, "qg", researcher_name)
+        self._set_if_value(params, "qm", researcher_number)
+        self._set_if_value(params, "qe", institution)
+        self._set_if_value(params, "qd", research_field)
+        if fiscal_year_from is not None:
+            params["s1"] = str(fiscal_year_from)
+        if fiscal_year_to is not None:
+            params["s2"] = str(fiscal_year_to)
+        if not params:
+            raise KakenError("At least one project search condition is required")
+        if (
+            fiscal_year_from is not None
+            and fiscal_year_to is not None
+            and fiscal_year_from > fiscal_year_to
+        ):
+            raise KakenError("fiscal_year_from must not exceed fiscal_year_to")
+        return await self._search_projects(params, limit, offset)
 
     async def get_project_detail(self, project_id: str) -> dict[str, Any]:
-        """Get detailed information for a specific research project.
-
-        Args:
-            project_id: Research project ID (e.g., "KAKENHI-PROJECT-19H00001" or "19H00001")
-
-        Returns:
-            Dictionary containing project details
-        """
-        # Extract numeric ID if full format is provided
+        """Get one project via the API's project-number search parameter."""
         numeric_id = project_id.removeprefix("KAKENHI-PROJECT-")
         if not re.fullmatch(r"[0-9A-Za-z]+", numeric_id):
-            msg = f"Invalid project ID: {project_id!r}"
-            raise KakenError(msg)
+            raise KakenError(f"Invalid project ID: {project_id!r}")
 
-        url = f"{self.settings.base_url}/ja/grant/KAKENHI-PROJECT-{numeric_id}/"
-        html = await self._request(url)
-        return self._parse_project_detail(html, numeric_id)
+        result = await self._search_projects({"qb": numeric_id}, 20, 0)
+        projects = cast(list[dict[str, Any]], result["projects"])
+        expected_id = f"KAKENHI-PROJECT-{numeric_id}"
+        project = next((item for item in projects if item.get("id") == expected_id), None)
+        if project is None:
+            raise KakenError(f"Project not found: {project_id!r}")
+        return project
 
     async def search_researchers(
         self,
@@ -158,50 +115,18 @@ class KakenClient:
         limit: int | None = None,
         offset: int = 0,
     ) -> dict[str, Any]:
-        """Search for researchers by scraping NRID website.
-
-        Args:
-            name: Researcher name
-            researcher_number: Researcher number
-            institution: Research institution name
-            research_field: Research field
-            limit: Maximum number of results
-            offset: Starting position for pagination
-
-        Returns:
-            Dictionary containing search results with total_count and researchers list
-        """
-        params: dict[str, str] = {}
-
-        # Build query using kw parameter
-        query_parts: list[str] = []
-        if name:
-            query_parts.append(name)
-        if institution:
-            query_parts.append(institution)
-        if research_field:
-            query_parts.append(research_field)
-
-        if query_parts:
-            params["kw"] = " ".join(query_parts)
-        if researcher_number:
-            params["qn"] = researcher_number
-
-        # Pagination - NRID requires minimum 20 results per page
-        requested_limit = limit or self.settings.default_limit
-        actual_limit = max(20, min(requested_limit, self.settings.max_limit))
-        params["rw"] = str(actual_limit)
-        if offset > 0:
-            params["st"] = str(offset + 1)
-
-        url = f"{self.settings.researcher_base_url}/ja/search/"
-        html = await self._request(url, params)
-        result = self._parse_researcher_results(html)
-
-        # Slice results if user requested fewer than 20
-        if requested_limit < len(result["researchers"]):
-            result["researchers"] = result["researchers"][:requested_limit]
-
+        """Search researchers and return the legacy normalized shape."""
+        if not any((name, researcher_number, institution, research_field)):
+            raise KakenError("At least one researcher search condition is required")
+        requested_limit = self._requested_limit(limit)
+        params = self._base_params("json", requested_limit, offset, max_start=1000)
+        self._set_if_value(params, "qg", name)
+        self._set_if_value(params, "qm", researcher_number)
+        self._set_if_value(params, "qh", institution)
+        self._set_if_value(params, "qd", research_field)
+        body = await self._request(self.settings.researcher_api_url, params, "json")
+        result = self._parse_researcher_results(body)
+        result["researchers"] = result["researchers"][:requested_limit]
         return result
 
     async def get_researcher_projects(
@@ -211,48 +136,73 @@ class KakenClient:
         limit: int | None = None,
         offset: int = 0,
     ) -> dict[str, Any]:
-        """Get research projects for a specific researcher.
+        """Get projects associated with a researcher, optionally by role."""
+        normalized_number = researcher_number.strip()
+        if not normalized_number:
+            raise KakenError("researcher_number is required")
 
-        Args:
-            researcher_number: Researcher number
-            role: Role filter (e.g., "principal", "co-investigator")
-            limit: Maximum number of results
-            offset: Starting position for pagination
-
-        Returns:
-            Dictionary containing search results
-        """
-        params: dict[str, str] = {"qm": researcher_number}
-
+        params = {"qm": normalized_number}
         if role:
-            if role.lower() in ["principal", "代表者", "研究代表者"]:
-                params["c2[]"] = "principal_investigator"
-            elif role.lower() in ["co-investigator", "分担者", "研究分担者"]:
-                params["c2[]"] = "co_investigator_buntan"
+            normalized_role = role.lower()
+            if normalized_role in {"principal", "代表者", "研究代表者"}:
+                params["c2"] = "principal_investigator"
+            elif normalized_role in {"co-investigator", "分担者", "研究分担者"}:
+                params["c2"] = "co_investigator_buntan"
+        return await self._search_projects(params, limit, offset)
 
-        # Pagination - KAKEN requires minimum 20 results per page
-        requested_limit = limit or self.settings.default_limit
-        actual_limit = max(20, min(requested_limit, self.settings.max_limit))
-        params["rw"] = str(actual_limit)
-        if offset > 0:
-            params["st"] = str(offset + 1)
-
-        url = f"{self.settings.base_url}/ja/search/"
-        html = await self._request(url, params)
-        result = self._parse_search_results(html)
-
-        # Slice results if user requested fewer than 20
-        if requested_limit < len(result["projects"]):
-            result["projects"] = result["projects"][:requested_limit]
-
+    async def _search_projects(
+        self, query: dict[str, str], limit: int | None, offset: int
+    ) -> dict[str, Any]:
+        requested_limit = self._requested_limit(limit)
+        params = self._base_params("xml", requested_limit, offset, max_start=200000)
+        params["c6"] = "project"
+        params.update(query)
+        body = await self._request(self.settings.project_api_url, params, "xml")
+        result = self._parse_search_results(body)
+        result["projects"] = result["projects"][:requested_limit]
         return result
 
-    async def _throttle(self) -> None:
-        """Reserve the next request slot so requests are spaced by request_delay.
+    def _base_params(
+        self, format_name: str, limit: int, offset: int, *, max_start: int
+    ) -> dict[str, str]:
+        if offset < 0:
+            raise KakenError("offset must be zero or greater")
+        if offset + 1 > max_start:
+            raise KakenError(f"offset exceeds the API maximum start position of {max_start}")
+        return {
+            "appid": self._app_id(),
+            "format": format_name,
+            "lang": "ja",
+            "rw": str(self._page_size(limit)),
+            "st": str(offset + 1),
+        }
 
-        Safe under concurrent tool calls: each caller reserves its own start
-        time inside the lock, then sleeps outside it.
-        """
+    def _app_id(self) -> str:
+        app_id = self.settings.app_id
+        if app_id is None or not app_id.get_secret_value():
+            raise KakenError("KAKEN_APP_ID is required to call the KAKEN OpenSearch API")
+        return app_id.get_secret_value()
+
+    def _requested_limit(self, limit: int | None) -> int:
+        requested = self.settings.default_limit if limit is None else limit
+        if requested <= 0:
+            raise KakenError("limit must be greater than zero")
+        maximum = min(self.settings.max_limit, self._VALID_PAGE_SIZES[-1])
+        if maximum <= 0:
+            raise KakenError("KAKEN_MAX_LIMIT must be greater than zero")
+        return min(requested, maximum)
+
+    @classmethod
+    def _page_size(cls, limit: int) -> int:
+        return next(size for size in cls._VALID_PAGE_SIZES if size >= limit)
+
+    @staticmethod
+    def _set_if_value(params: dict[str, str], key: str, value: str | None) -> None:
+        if value:
+            params[key] = value
+
+    async def _throttle(self) -> None:
+        """Reserve one rate-limited request slot."""
         async with self._rate_limit_lock:
             now = time.monotonic()
             start_at = max(now, self._next_request_at)
@@ -261,312 +211,404 @@ class KakenClient:
         if delay > 0:
             await asyncio.sleep(delay)
 
-    async def _request(
-        self, url: str, params: dict[str, str] | None = None
-    ) -> str:
-        """Make an HTTP request with rate limiting and retry logic.
-
-        Args:
-            url: URL to request
-            params: Query parameters
-
-        Returns:
-            Response HTML text
-
-        Raises:
-            KakenError: If the request fails after all retries
-        """
-        last_error: Exception | None = None
+    async def _request(self, url: str, params: dict[str, str], expected_format: str) -> str:
+        """Request one API response with throttling, retry, and media validation."""
         for attempt in range(self.settings.max_retries):
             await self._throttle()
             try:
                 response = await self._http_client().get(url, params=params)
                 response.raise_for_status()
+                self._raise_api_error(response.text)
+                self._validate_content_type(response, expected_format)
                 return response.text
-            except httpx.HTTPStatusError as e:
-                # Don't retry client errors (4xx)
-                if 400 <= e.response.status_code < 500:
-                    raise KakenError(
-                        f"Request failed with status {e.response.status_code}"
-                    ) from e
-                last_error = e
-            except httpx.RequestError as e:
-                last_error = e
+            except httpx.HTTPStatusError as error:
+                status = error.response.status_code
+                is_rate_limited = status == 429 or (
+                    status == 403 and self._is_rate_limit_response(error.response.text)
+                )
+                if 400 <= status < 500 and not is_rate_limited:
+                    raise KakenError(f"KAKEN API request failed with status {status}") from None
+            except httpx.RequestError:
+                pass
 
-            # Exponential backoff for retries
             if attempt < self.settings.max_retries - 1:
-                delay = self.settings.retry_delay * (2**attempt)
-                await asyncio.sleep(delay)
+                await asyncio.sleep(self.settings.retry_delay * (2**attempt))
 
-        # All retries exhausted
-        if last_error:
-            msg = f"Request failed after {self.settings.max_retries} retries: {last_error}"
-            raise KakenError(msg) from last_error
-        raise KakenError("Request failed with unknown error")
+        raise KakenError(f"KAKEN API request failed after {self.settings.max_retries} attempts")
 
-    def _parse_search_results(self, html: str) -> dict[str, Any]:
-        """Parse search results HTML.
+    @classmethod
+    def _validate_content_type(cls, response: httpx.Response, expected_format: str) -> None:
+        content_type = response.headers.get("content-type", "").lower()
+        valid = "xml" in content_type if expected_format == "xml" else "json" in content_type
+        if not valid and "application/octet-stream" in content_type:
+            body = response.text.lstrip()
+            if expected_format == "json":
+                valid = body.startswith("{")
+            else:
+                try:
+                    root = ElementTree.fromstring(body)
+                except ElementTree.ParseError:
+                    pass
+                else:
+                    valid = cls._local_name(root.tag) in {"grantAwards", "grantAwardList"}
+        if not valid:
+            raise KakenError(f"KAKEN API returned an unexpected content type for {expected_format}")
 
-        Args:
-            html: HTML response text
+    @classmethod
+    def _raise_api_error(cls, body: str) -> None:
+        """Recognize the API's XML error envelope without echoing its detail."""
+        if not body.lstrip().startswith("<"):
+            return
+        try:
+            root = ElementTree.fromstring(body)
+        except ElementTree.ParseError:
+            return
+        if cls._local_name(root.tag) != "error":
+            return
+        code = cls._child_text(root, "code") or "unknown"
+        reason = cls._child_text(root, "reason") or "unknown error"
+        raise KakenError(f"KAKEN API error {code}: {reason}")
 
-        Returns:
-            Parsed results as dictionary
-        """
-        soup = BeautifulSoup(html, "html.parser")
-        projects: list[dict[str, Any]] = []
+    @classmethod
+    def _is_rate_limit_response(cls, body: str) -> bool:
+        """Identify NII's 403 rate-limit envelope without exposing its body."""
+        try:
+            root = ElementTree.fromstring(body)
+        except ElementTree.ParseError:
+            return False
+        return (
+            cls._local_name(root.tag) == "error"
+            and "rate" in cls._child_text(root, "detail").lower()
+        )
 
-        # Find total count - try multiple patterns
-        total_count = 0
+    def _parse_search_results(self, xml_text: str) -> dict[str, Any]:
+        """Normalize a project XML response."""
+        try:
+            root = ElementTree.fromstring(xml_text)
+        except ElementTree.ParseError:
+            raise KakenError("KAKEN API returned invalid XML") from None
 
-        # Pattern 1: "検索結果: X件" format
-        for text in soup.find_all(string=re.compile(r"[\d,]+件")):
-            text_str = str(text)
-            match = re.search(r"([\d,]+)件", text_str)
-            if match:
-                total_count = int(match.group(1).replace(",", ""))
-                break
+        projects = [self._parse_project(element) for element in self._children(root, "grantAward")]
+        total_count = self._as_int(self._descendant_text(root, "totalResults")) or 0
+        return {"total_count": total_count, "projects": projects}
 
-        # Pattern 2: Class-based selectors (fallback)
-        if total_count == 0:
-            count_elem = soup.select_one(".search-result-count, .result-count, strong")
-            if count_elem:
-                count_text = count_elem.get_text()
-                numbers = re.findall(r"[\d,]+", count_text)
-                if numbers:
-                    total_count = int(numbers[0].replace(",", ""))
-
-        # Parse each project entry
-        # Try multiple selectors for different page structures
-        entries = soup.select(".search-result-item, .result-item, article, .grant-item")
-
-        if not entries:
-            # Fallback: look for h3 with links to grant pages
-            for h3 in soup.find_all("h3"):
-                link = h3.find("a", href=re.compile(r"/grant/"))
-                if link:
-                    project = self._parse_project_from_list(h3.parent or h3)
-                    if project:
-                        projects.append(project)
-        else:
-            for entry in entries:
-                project = self._parse_project_from_list(entry)
-                if project:
-                    projects.append(project)
-
-        return {
-            "total_count": total_count,
-            "projects": projects,
+    def _parse_project(self, grant: ElementTree.Element) -> dict[str, Any]:
+        summary = self._localized_child(grant, "summary")
+        grant_id = grant.attrib.get("id", "")
+        if not re.fullmatch(r"KAKENHI-[A-Z]+-[0-9A-Za-z]+", grant_id):
+            raw_project_id = (
+                grant.attrib.get("awardNumber") or self._award_number(summary) or grant_id
+            )
+            project_id = raw_project_id.removeprefix("KAKENHI-PROJECT-")
+            grant_id = f"KAKENHI-PROJECT-{project_id}"
+        api_url = self._localized_url(grant)
+        project: dict[str, Any] = {
+            "id": grant_id,
+            "url": api_url or self._grant_url(grant_id),
         }
 
-    def _parse_project_from_list(self, element: Tag) -> dict[str, Any] | None:
-        """Parse a single project entry from search results.
+        self._put(project, "title", self._child_text(summary, "title"))
+        category_fc = self._child_text(summary, "categoryFc")
+        categories = self._child_texts(summary, "category")
+        if category_fc:
+            project["research_category"] = category_fc
+        elif categories:
+            project["research_category"] = categories[-1]
+        institutions = self._ordered_children(summary, "institution")
+        if institutions:
+            self._put(project, "institution", "".join(institutions[0].itertext()).strip())
 
-        Args:
-            element: BeautifulSoup element containing project info
+        members = self._ordered_children(summary, "member")
+        principal = next(
+            (
+                member
+                for member in members
+                if member.attrib.get("role") in {"principal_investigator", "area_organizer"}
+            ),
+            None,
+        )
+        if principal is not None:
+            self._put(
+                project,
+                "principal_investigator",
+                self._project_member_name(principal),
+            )
+            if "institution" not in project:
+                self._put(
+                    project,
+                    "institution",
+                    self._descendant_text(principal, "institution"),
+                )
 
-        Returns:
-            Project data as dictionary or None if parsing fails
-        """
-        project: dict[str, Any] = {}
+        researchers = [self._parse_project_member(member) for member in members]
+        researchers = [researcher for researcher in researchers if researcher]
+        if researchers:
+            project["researchers"] = researchers
 
-        # Find title and URL
-        title_link = element.find("a", href=re.compile(r"/grant/"))
-        if title_link:
-            project["title"] = title_link.get_text(strip=True)
-            href_attr = title_link.get("href", "")
-            href = str(href_attr) if href_attr else ""
-            if href:
-                if href.startswith("/"):
-                    project["url"] = f"{self.settings.base_url}{href}"
-                else:
-                    project["url"] = href
-                # Extract project ID from URL
-                match = re.search(r"KAKENHI-PROJECT-([A-Z0-9]+)", href)
-                if match:
-                    project["id"] = f"KAKENHI-PROJECT-{match.group(1)}"
+        period = self._child(summary, "periodOfAward")
+        if period is not None:
+            start = self._period_year(period, "Start")
+            end = self._period_year(period, "End")
+            if start is not None:
+                project["fiscal_year_start"] = start
+            if end is not None:
+                project["fiscal_year_end"] = end
+            if start is not None:
+                project["fiscal_years"] = str(start) if end is None else f"{start} - {end}"
 
-        if not project.get("title"):
+        status = self._child(summary, "projectStatus")
+        if status is not None and status.attrib.get("statusCode"):
+            project["status"] = status.attrib["statusCode"]
+
+        keywords_parent = self._child(summary, "keywordList")
+        if keywords_parent is not None:
+            keywords = self._ordered_texts(keywords_parent, "keyword")
+            if keywords:
+                project["keywords"] = keywords
+
+        paragraphs = self._children(summary, "paragraphList")
+        abstract = next(
+            (item for item in paragraphs if item.attrib.get("type") == "abstract"),
+            None,
+        )
+        if abstract is None:
+            abstract = next(
+                (
+                    item
+                    for item in paragraphs
+                    if item.attrib.get("type") == "outline_of_research_initial"
+                ),
+                None,
+            )
+        if abstract is not None:
+            summary_text = "\n".join(self._ordered_texts(abstract, "paragraph"))[:1000]
+            self._put(project, "summary", summary_text)
+
+        review_sections = self._ordered_texts(summary, "review_section")
+        fields = self._ordered_texts(summary, "field")
+        if review_sections:
+            project["review_section"] = review_sections[0]
+        if fields:
+            project["research_field"] = fields[0]
+
+        amounts = self._ordered_children(summary, "overallAwardAmount")
+        amount = next((item for item in amounts if item.attrib.get("planned") != "true"), None)
+        if amount is None and amounts:
+            amount = amounts[0]
+        if amount is not None:
+            total = self._cost_value(amount, "convertedJpyTotalCost")
+            if total is None:
+                total = self._cost_value(amount, "totalCost")
+            if total is not None:
+                project["total_budget"] = total
+        return project
+
+    def _parse_project_member(self, member: ElementTree.Element) -> dict[str, Any]:
+        researcher: dict[str, Any] = {}
+        self._put(researcher, "name", self._project_member_name(member))
+        self._put(researcher, "role", member.attrib.get("role", ""))
+        self._put(
+            researcher,
+            "researcher_number",
+            member.attrib.get("researcherNumber", "") or member.attrib.get("eradCode", ""),
+        )
+        self._put(researcher, "institution", self._descendant_text(member, "institution"))
+        return researcher
+
+    def _project_member_name(self, member: ElementTree.Element) -> str:
+        names = self._ordered_children(member, "personalName")
+        return self._descendant_text(names[0], "fullName") if names else ""
+
+    def _cost_value(self, amount: ElementTree.Element, name: str) -> int | None:
+        element = self._child(amount, name)
+        if element is None:
+            return None
+        normalized = self._descendant_text(element, "normalizedValue")
+        return self._as_int(normalized or "".join(element.itertext()).strip())
+
+    def _period_year(self, period: ElementTree.Element, boundary: str) -> int | None:
+        search_year = self._as_int(period.attrib.get(f"search{boundary}FiscalYear"))
+        fiscal_year = self._as_int(self._child_text(period, f"{boundary.lower()}FiscalYear"))
+        date = self._child_text(period, f"{boundary.lower()}Date")
+        date_match = re.fullmatch(r"(\d{4})-(\d{2})-\d{2}", date)
+        date_year = None
+        if date_match:
+            year, month = (int(part) for part in date_match.groups())
+            date_year = year if month >= 4 else year - 1
+        return search_year or fiscal_year or date_year
+
+    def _parse_researcher_results(self, json_text: str) -> dict[str, Any]:
+        """Normalize a researcher JSON response."""
+        try:
+            payload = json.loads(json_text)
+        except json.JSONDecodeError:
+            raise KakenError("KAKEN API returned invalid JSON") from None
+        if not isinstance(payload, dict):
+            raise KakenError("KAKEN API returned an invalid researcher response")
+
+        raw_researchers = payload.get("researchers", [])
+        if not isinstance(raw_researchers, list):
+            raise KakenError("KAKEN API returned an invalid researcher response")
+        researchers = [
+            self._parse_researcher(item) for item in raw_researchers if isinstance(item, dict)
+        ]
+        total = self._as_int(payload.get("totalResults")) or 0
+        return {"total_count": total, "researchers": researchers}
+
+    def _parse_researcher(self, researcher: Mapping[str, Any]) -> dict[str, Any]:
+        number = self._first_string(researcher.get("id:person:erad"))
+        accn = researcher.get("accn")
+        nrid_match = re.search(r"(?<!\d)(\d{13})(?!\d)", accn) if isinstance(accn, str) else None
+        nrid = nrid_match.group(1) if nrid_match is not None else ""
+        if not number and nrid.startswith("1000"):
+            number = nrid.removeprefix("1000")
+        if not nrid and re.fullmatch(r"\d{8,9}", number):
+            nrid = f"1000{number.zfill(9)}"
+
+        result: dict[str, Any] = {
+            "researcher_number": number,
+            "name": self._human_text(researcher.get("name")),
+        }
+        if nrid:
+            result["url"] = f"{self.settings.researcher_base_url}/ja/nrid/{nrid}/"
+        affiliations = researcher.get("affiliations:current")
+        if isinstance(affiliations, list) and affiliations:
+            affiliation = min(
+                (item for item in affiliations if isinstance(item, Mapping)),
+                key=self._mapping_sequence,
+                default=None,
+            )
+            if isinstance(affiliation, Mapping):
+                institution = self._human_text(affiliation.get("affiliation:institution"))
+                department = self._human_text(affiliation.get("affiliation:department"))
+                job_title = self._human_text(affiliation.get("affiliation:jobTitle"))
+                parts = [part for part in (institution, department, job_title) if part]
+                if parts:
+                    result["affiliation"] = " ".join(parts)
+                self._put(result, "institution", institution)
+                self._put(result, "department", department)
+                self._put(result, "job_title", job_title)
+        return result
+
+    def _grant_url(self, grant_id: str) -> str:
+        return f"{self.settings.base_url}/ja/grant/{grant_id}/"
+
+    @classmethod
+    def _localized_url(cls, grant: ElementTree.Element) -> str:
+        url_list = cls._child(grant, "urlList")
+        if url_list is None:
+            return ""
+        urls = cls._children(url_list, "url")
+        lang_key = "{http://www.w3.org/XML/1998/namespace}lang"
+        selected = next((item for item in urls if item.attrib.get(lang_key) == "ja"), None)
+        if selected is None and urls:
+            selected = urls[0]
+        return "" if selected is None else "".join(selected.itertext()).strip()
+
+    @staticmethod
+    def _local_name(tag: str) -> str:
+        return tag.rsplit("}", 1)[-1]
+
+    @classmethod
+    def _children(cls, element: ElementTree.Element, name: str) -> list[ElementTree.Element]:
+        return [child for child in element if cls._local_name(child.tag) == name]
+
+    @classmethod
+    def _ordered_children(
+        cls, element: ElementTree.Element, name: str
+    ) -> list[ElementTree.Element]:
+        def sequence(item: ElementTree.Element) -> int:
+            return cls._as_int(item.attrib.get("sequence")) or 1_000_000
+
+        return sorted(cls._children(element, name), key=sequence)
+
+    @classmethod
+    def _ordered_texts(cls, element: ElementTree.Element, name: str) -> list[str]:
+        return [
+            text
+            for child in cls._ordered_children(element, name)
+            if (text := "".join(child.itertext()).strip())
+        ]
+
+    @classmethod
+    def _child(cls, element: ElementTree.Element, name: str) -> ElementTree.Element | None:
+        return next(iter(cls._children(element, name)), None)
+
+    @classmethod
+    def _localized_child(cls, element: ElementTree.Element, name: str) -> ElementTree.Element:
+        candidates = cls._children(element, name)
+        if not candidates:
+            return ElementTree.Element(name)
+        lang_key = "{http://www.w3.org/XML/1998/namespace}lang"
+        return next(
+            (item for item in candidates if item.attrib.get(lang_key) == "ja"),
+            candidates[0],
+        )
+
+    @classmethod
+    def _child_text(cls, element: ElementTree.Element, name: str) -> str:
+        child = cls._child(element, name)
+        return "" if child is None else "".join(child.itertext()).strip()
+
+    @classmethod
+    def _child_texts(cls, element: ElementTree.Element, name: str) -> list[str]:
+        return [
+            text
+            for child in cls._children(element, name)
+            if (text := "".join(child.itertext()).strip())
+        ]
+
+    @classmethod
+    def _descendant_text(cls, element: ElementTree.Element, name: str) -> str:
+        descendant = next(
+            (item for item in element.iter() if cls._local_name(item.tag) == name), None
+        )
+        return "" if descendant is None else "".join(descendant.itertext()).strip()
+
+    @classmethod
+    def _award_number(cls, summary: ElementTree.Element) -> str:
+        award = cls._child(summary, "awardNumber")
+        if award is None:
+            return ""
+        return award.attrib.get("awardNumber") or "".join(award.itertext()).strip()
+
+    @staticmethod
+    def _as_int(value: object) -> int | None:
+        try:
+            return int(str(value).replace(",", ""))
+        except (TypeError, ValueError):
             return None
 
-        # Find researcher info (usually in h4 or similar)
-        researcher_elem = element.find("h4")
-        if researcher_elem:
-            text = researcher_elem.get_text(strip=True)
-            # Parse "研究者名 所属, 部局, 職位" format
-            parts = text.split(",")
-            if parts:
-                project["principal_investigator"] = parts[0].strip()
-            if len(parts) > 1:
-                project["institution"] = parts[1].strip()
+    @staticmethod
+    def _put(target: dict[str, Any], key: str, value: str) -> None:
+        if value:
+            target[key] = value
 
-        # Find research period
-        period_text = element.get_text()
-        period_match = re.search(r"(\d{4})[年\-/]?\s*[-–～~]\s*(\d{4})?", period_text)
-        if period_match:
-            project["fiscal_year_start"] = int(period_match.group(1))
-            if period_match.group(2):
-                project["fiscal_year_end"] = int(period_match.group(2))
+    @classmethod
+    def _human_text(cls, value: object) -> str:
+        if isinstance(value, Mapping):
+            value = value.get("humanReadableValue", value.get("text", ""))
+        if isinstance(value, list):
+            japanese = next(
+                (item for item in value if isinstance(item, Mapping) and item.get("lang") == "ja"),
+                None,
+            )
+            fallback = japanese if japanese is not None else (value[0] if value else "")
+            return cls._human_text(fallback)
+        if isinstance(value, Mapping):
+            text = value.get("text", "")
+            return text if isinstance(text, str) else ""
+        return value if isinstance(value, str) else ""
 
-        # Find budget amount (require at least one digit)
-        budget_match = re.search(r"[¥￥]\s*([\d,]+)", period_text)
-        if budget_match and budget_match.group(1):
-            amount_str = budget_match.group(1).replace(",", "")
-            if amount_str.isdigit():
-                project["total_budget"] = int(amount_str)
+    @staticmethod
+    def _first_string(value: object) -> str:
+        if isinstance(value, str):
+            return value
+        if isinstance(value, Iterable) and not isinstance(value, (str, bytes, Mapping)):
+            return next((item for item in value if isinstance(item, str)), "")
+        return ""
 
-        return project
-
-    def _parse_project_detail(self, html: str, project_id: str) -> dict[str, Any]:
-        """Parse project detail page HTML.
-
-        Args:
-            html: HTML response text
-            project_id: Project ID for reference
-
-        Returns:
-            Parsed project details as dictionary
-        """
-        soup = BeautifulSoup(html, "html.parser")
-        project: dict[str, Any] = {
-            "id": f"KAKENHI-PROJECT-{project_id}",
-            "url": f"{self.settings.base_url}/ja/grant/KAKENHI-PROJECT-{project_id}/",
-        }
-
-        # Title
-        title_elem = soup.find("h1")
-        if title_elem:
-            title_text = title_elem.get_text(strip=True)
-            # Remove "KAKEN — " prefix if present
-            title_text = re.sub(r"^KAKEN\s*[—–-]\s*", "", title_text)
-            project["title"] = title_text
-
-        # Parse table rows (th: label, td: value)
-        field_mapping = {
-            "研究種目": "research_category",
-            "研究機関": "institution",
-            "研究代表者": "principal_investigator",
-            "研究期間": "fiscal_years",
-            "配分額": "budget_text",
-            "キーワード": "keywords_text",
-            "研究概要": "summary",
-            "研究開始時の研究の概要": "summary",
-            "審査区分": "review_section",
-            "研究分野": "research_field",
-            "研究課題ステータス": "status",
-        }
-
-        for row in soup.find_all("tr"):
-            th = row.find("th")
-            td = row.find("td")
-            if th and td:
-                label = th.get_text(strip=True)
-                value = td.get_text(strip=True)
-
-                # Match label to field
-                for key_pattern, field_name in field_mapping.items():
-                    if key_pattern in label:
-                        if field_name == "keywords_text":
-                            # Parse keywords
-                            keywords = [k.strip() for k in re.split(r"[/／、,]", value)]
-                            project["keywords"] = [k for k in keywords if k]
-                        elif field_name == "budget_text":
-                            # Parse budget - extract total amount
-                            budget_match = re.search(r"([\d,]+)千円", value)
-                            if budget_match:
-                                # Convert from thousands to yen
-                                project["total_budget"] = (
-                                    int(budget_match.group(1).replace(",", "")) * 1000
-                                )
-                        elif field_name == "fiscal_years":
-                            # Parse fiscal years
-                            project["fiscal_years"] = value
-                            year_match = re.search(r"(\d{4})", value)
-                            if year_match:
-                                project["fiscal_year_start"] = int(year_match.group(1))
-                            end_match = re.search(r"[–-]\s*(\d{4})", value)
-                            if end_match:
-                                project["fiscal_year_end"] = int(end_match.group(1))
-                        elif field_name == "summary":
-                            project["summary"] = value[:1000]
-                        else:
-                            project[field_name] = value
-                        break
-
-        return project
-
-    def _parse_researcher_results(self, html: str) -> dict[str, Any]:
-        """Parse researcher search results HTML.
-
-        Args:
-            html: HTML response text
-
-        Returns:
-            Parsed results as dictionary
-        """
-        soup = BeautifulSoup(html, "html.parser")
-        researchers: list[dict[str, Any]] = []
-
-        # Find total count - "検索結果: X件" format
-        total_count = 0
-        for text in soup.find_all(string=re.compile(r"[\d,]+件")):
-            text_str = str(text)
-            match = re.search(r"([\d,]+)件", text_str)
-            if match:
-                total_count = int(match.group(1).replace(",", ""))
-                break
-
-        # Parse researcher entries - look for links to /nrid/ pages
-        seen_ids: set[str] = set()
-        for link in soup.find_all("a", href=re.compile(r"/nrid/")):
-            href = str(link.get("href", ""))
-            # Extract researcher number from URL
-            nrid_match = re.search(r"/nrid/(\d+)/", href)
-            if not nrid_match:
-                continue
-
-            researcher_number = nrid_match.group(1)
-            # Remove leading 1000 prefix if present
-            if researcher_number.startswith("1000"):
-                researcher_number = researcher_number[4:]
-
-            # Skip duplicates
-            if researcher_number in seen_ids:
-                continue
-            seen_ids.add(researcher_number)
-
-            # Get researcher name from link text
-            # Format: "山田 太郎  Yamada Taro  (12345678)"
-            name_text = link.get_text(strip=True)
-
-            # Extract Japanese name - characters before romanization
-            # Japanese name ends where ASCII letters begin
-            jp_name_match = re.match(r"([\u3000-\u9fff\s]+)", name_text)
-            if jp_name_match:
-                name = jp_name_match.group(1).strip()
-            else:
-                # Fallback: take first two space-separated parts
-                parts = name_text.split()
-                name = " ".join(parts[:2]) if len(parts) >= 2 else parts[0]
-
-            researcher: dict[str, Any] = {
-                "researcher_number": researcher_number,
-                "name": name,
-                "url": f"{self.settings.researcher_base_url}{href}",
-            }
-
-            # Try to get affiliation from parent elements
-            parent = link.find_parent("li") or link.find_parent("div")
-            if parent:
-                parent_text = parent.get_text(" ", strip=True)
-                # Look for affiliation pattern after the name
-                aff_match = re.search(r"(?:所属|機関)[：:]?\s*(.+?)(?:\s|$)", parent_text)
-                if aff_match:
-                    researcher["affiliation"] = aff_match.group(1)
-
-            researchers.append(researcher)
-
-        return {
-            "total_count": total_count,
-            "researchers": researchers,
-        }
+    @staticmethod
+    def _mapping_sequence(value: Mapping[str, Any]) -> int:
+        sequence = KakenClient._as_int(value.get("sequence"))
+        return sequence if sequence is not None else 1_000_000
