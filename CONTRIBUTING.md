@@ -30,13 +30,14 @@ uv run mypy kaken_mcp
 uv run pytest
 ```
 
-## KAKEN サイトに関わる変更の注意
+## KAKEN APIに関わる変更の注意
 
-このプロジェクトは kaken.nii.ac.jp / nrid.nii.ac.jp をスクレイピングします。検索パラメータや HTML パーサに関わる変更では、次の点をお願いします。
+このプロジェクトは kaken.nii.ac.jp / nrid.nii.ac.jp の公式OpenSearch APIを利用します。検索パラメータやXML・JSON変換に関わる変更では、次の点をお願いします。
 
-- **実サイトで検証する**: KAKEN の検索パラメータは、無効な名前を渡してもエラーにならず黙って無視されます（結果は全件返ってくるため、一見動いているように見えます）。フィルタを変更したら、総件数が「パラメータなしの全件数」と異なることまで確認してください
+- **公式定義を確認する**: [KAKEN公開XML定義・APIパラメータ](https://bitbucket.org/niijp/kaken_definition/src/master/)と実レスポンスの両方に照らして変更してください
+- **登録済みappidで限定検証する**: `KAKEN_APP_ID` を環境変数から渡し、フィルタ変更時は期待した条件と総件数を確認してください。appidをログ、fixture、PR本文へ記録しないでください
 - **レート制限を守る**: 検証時はリクエスト間に 1 秒以上の間隔を置き、識別可能な User-Agent を付けてください
-- PR には検証に使った URL と返ってきた件数を書いてください（[PR #2](https://github.com/leaveanest/kaken-mcp/pull/2) が良い例です）
+- PRにはappidを除いた検索条件と確認結果を書いてください
 
 ## バグ報告
 

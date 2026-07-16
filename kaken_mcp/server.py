@@ -40,7 +40,8 @@ Available tools:
 - search_researchers: Search for researchers by name, affiliation, or research field
 - get_researcher_projects: Get all research projects for a specific researcher
 
-No API key or registration is required; data is fetched from the public KAKEN website.
+Data is fetched from the official KAKEN OpenSearch API. Set KAKEN_APP_ID to the
+application ID issued through the CiNii Web API user registration.
         """.strip(),
         lifespan=lifespan,
     )

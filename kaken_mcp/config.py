@@ -1,5 +1,6 @@
 """Configuration management for KAKEN MCP."""
 
+from pydantic import SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -13,9 +14,14 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    # Base URLs for KAKEN website
+    # Public website URLs used only to build links returned to callers.
     base_url: str = "https://kaken.nii.ac.jp"
     researcher_base_url: str = "https://nrid.nii.ac.jp"
+
+    # Official OpenSearch API endpoints and credential.
+    project_api_url: str = "https://kaken.nii.ac.jp/opensearch/"
+    researcher_api_url: str = "https://nrid.nii.ac.jp/opensearch/"
+    app_id: SecretStr | None = None
 
     # Default request settings
     default_limit: int = 20
