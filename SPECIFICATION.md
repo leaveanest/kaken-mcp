@@ -210,10 +210,10 @@ kaken-mcp/
   "total_count": 50,
   "researchers": [
     {
-      "researcher_number": "1000000000001",
+      "researcher_number": "12345678",
       "name": "研究者名",
       "affiliation": "東京大学 情報理工学系研究科",
-      "url": "https://nrid.nii.ac.jp/ja/nrid/1000000000001/"
+      "url": "https://nrid.nii.ac.jp/ja/nrid/1000012345678/"
     }
   ]
 }

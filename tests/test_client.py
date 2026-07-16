@@ -66,8 +66,8 @@ RESEARCHER_JSON = json.dumps(
     {
         "researchers": [
             {
-                "accn": "1000000000001",
-                "recordSource": {"id:person:kakenhi": ["000000001"]},
+                "accn": "nrid:1000000000001",
+                "recordSource": {"id:person:kakenhi": ["7654321", "7654322"]},
                 "id:person:erad": ["12345678"],
                 "name": {
                     "humanReadableValue": [
@@ -124,7 +124,7 @@ class TestProjectAPI:
 
     async def test_search_projects_uses_documented_parameters(self, settings: Settings) -> None:
         with patch("httpx.AsyncClient.get", new_callable=AsyncMock) as mock_get:
-            mock_get.return_value = response(PROJECT_XML, "application/xml; charset=utf-8")
+            mock_get.return_value = response(PROJECT_XML, "application/octet-stream")
             async with KakenClient(settings) as client:
                 result = await client.search_projects(
                     keyword="AI",
@@ -147,6 +147,7 @@ class TestProjectAPI:
             "lang": "ja",
             "rw": "20",
             "st": "101",
+            "c6": "project",
             "kw": "AI",
             "qa": "題名",
             "qg": "山田",
@@ -190,6 +191,18 @@ class TestProjectAPI:
         assert result["projects"][1]["id"] == "KAKENHI-PROJECT-20K00002"
         assert result["projects"][1]["fiscal_year_start"] == 2020
         assert result["projects"][1]["fiscal_year_end"] == 2024
+
+    def test_preserves_canonical_non_project_grant_id(self, settings: Settings) -> None:
+        xml = """<grantAwardList>
+          <grantAward id="KAKENHI-AREA-25A102" projectType="area" awardNumber="25A102">
+            <summary xml:lang="ja"><title>研究領域</title></summary>
+          </grantAward><totalResults>1</totalResults>
+        </grantAwardList>"""
+        result = KakenClient(settings)._parse_search_results(xml)
+        assert result["projects"][0]["id"] == "KAKENHI-AREA-25A102"
+        assert result["projects"][0]["url"] == (
+            "https://kaken.nii.ac.jp/ja/grant/KAKENHI-AREA-25A102/"
+        )
 
     @pytest.mark.parametrize(
         ("limit", "expected_rw"), [(1, "20"), (20, "20"), (21, "50"), (51, "100"), (101, "200")]
@@ -267,13 +280,22 @@ class TestProjectAPI:
         assert params["qm"] == "12345678"
         assert params["c2"] == "principal_investigator"
 
+    @pytest.mark.parametrize("researcher_number", ["", " ", "\t"])
+    async def test_get_researcher_projects_rejects_empty_number(
+        self, settings: Settings, researcher_number: str
+    ) -> None:
+        with patch("httpx.AsyncClient.get", new_callable=AsyncMock) as mock_get:
+            with pytest.raises(KakenError, match="researcher_number is required"):
+                await KakenClient(settings).get_researcher_projects(researcher_number)
+        mock_get.assert_not_called()
+
 
 class TestResearcherAPI:
     """Researcher endpoint and JSON normalization tests."""
 
     async def test_search_researchers_uses_documented_parameters(self, settings: Settings) -> None:
         with patch("httpx.AsyncClient.get", new_callable=AsyncMock) as mock_get:
-            mock_get.return_value = response(RESEARCHER_JSON, "application/json")
+            mock_get.return_value = response(RESEARCHER_JSON, "application/octet-stream")
             async with KakenClient(settings) as client:
                 result = await client.search_researchers(
                     name="山田",
@@ -300,7 +322,7 @@ class TestResearcherAPI:
             "total_count": 150,
             "researchers": [
                 {
-                    "researcher_number": "000000001",
+                    "researcher_number": "12345678",
                     "name": "山田 太郎",
                     "url": "https://nrid.nii.ac.jp/ja/nrid/1000000000001/",
                     "affiliation": "東京大学 情報理工学系研究科 教授",
@@ -321,17 +343,27 @@ class TestResearcherAPI:
             }
         )
         assert result["researcher_number"] == "12345678"
-        assert result["url"] == "https://nrid.nii.ac.jp/ja/nrid/100012345678/"
+        assert result["url"] == "https://nrid.nii.ac.jp/ja/nrid/1000012345678/"
 
-    def test_researcher_number_starting_with_1000_is_preserved(self, settings: Settings) -> None:
+    def test_researcher_url_requires_a_valid_nrid_source(self, settings: Settings) -> None:
         result = KakenClient(settings)._parse_researcher(
             {
-                "accn": "1000000000002",
-                "recordSource": {"id:person:kakenhi": ["10001234"]},
+                "accn": "not-an-nrid",
+                "id:person:erad": ["not-a-number"],
+                "name": {"humanReadableValue": [{"lang": "ja", "text": "不明 研究者"}]},
+            }
+        )
+        assert "url" not in result
+
+    def test_researcher_number_falls_back_to_nrid_suffix(self, settings: Settings) -> None:
+        result = KakenClient(settings)._parse_researcher(
+            {
+                "accn": "nrid:1000000000002",
+                "recordSource": {"id:person:kakenhi": ["7654321"]},
                 "name": {"humanReadableValue": [{"lang": "ja", "text": "高橋 一郎"}]},
             }
         )
-        assert result["researcher_number"] == "10001234"
+        assert result["researcher_number"] == "000000002"
         assert result["url"] == "https://nrid.nii.ac.jp/ja/nrid/1000000000002/"
 
 
@@ -388,6 +420,7 @@ class TestErrorsAndLifecycle:
         ("body", "content_type", "message"),
         [
             ("<html>error</html>", "text/html", "unexpected content type"),
+            ("<html>error</html>", "application/octet-stream", "unexpected content type"),
             ("not XML", "application/xml", "invalid XML"),
         ],
     )

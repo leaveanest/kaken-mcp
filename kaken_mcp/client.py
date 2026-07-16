@@ -137,7 +137,11 @@ class KakenClient:
         offset: int = 0,
     ) -> dict[str, Any]:
         """Get projects associated with a researcher, optionally by role."""
-        params = {"qm": researcher_number}
+        normalized_number = researcher_number.strip()
+        if not normalized_number:
+            raise KakenError("researcher_number is required")
+
+        params = {"qm": normalized_number}
         if role:
             normalized_role = role.lower()
             if normalized_role in {"principal", "代表者", "研究代表者"}:
@@ -151,6 +155,7 @@ class KakenClient:
     ) -> dict[str, Any]:
         requested_limit = self._requested_limit(limit)
         params = self._base_params("xml", requested_limit, offset, max_start=200000)
+        params["c6"] = "project"
         params.update(query)
         body = await self._request(self.settings.project_api_url, params, "xml")
         result = self._parse_search_results(body)
@@ -231,10 +236,21 @@ class KakenClient:
 
         raise KakenError(f"KAKEN API request failed after {self.settings.max_retries} attempts")
 
-    @staticmethod
-    def _validate_content_type(response: httpx.Response, expected_format: str) -> None:
+    @classmethod
+    def _validate_content_type(cls, response: httpx.Response, expected_format: str) -> None:
         content_type = response.headers.get("content-type", "").lower()
         valid = "xml" in content_type if expected_format == "xml" else "json" in content_type
+        if not valid and "application/octet-stream" in content_type:
+            body = response.text.lstrip()
+            if expected_format == "json":
+                valid = body.startswith("{")
+            else:
+                try:
+                    root = ElementTree.fromstring(body)
+                except ElementTree.ParseError:
+                    pass
+                else:
+                    valid = cls._local_name(root.tag) in {"grantAwards", "grantAwardList"}
         if not valid:
             raise KakenError(f"KAKEN API returned an unexpected content type for {expected_format}")
 
@@ -278,16 +294,17 @@ class KakenClient:
 
     def _parse_project(self, grant: ElementTree.Element) -> dict[str, Any]:
         summary = self._localized_child(grant, "summary")
-        raw_project_id = (
-            grant.attrib.get("awardNumber")
-            or self._award_number(summary)
-            or grant.attrib.get("id", "")
-        )
-        project_id = raw_project_id.removeprefix("KAKENHI-PROJECT-")
+        grant_id = grant.attrib.get("id", "")
+        if not re.fullmatch(r"KAKENHI-[A-Z]+-[0-9A-Za-z]+", grant_id):
+            raw_project_id = (
+                grant.attrib.get("awardNumber") or self._award_number(summary) or grant_id
+            )
+            project_id = raw_project_id.removeprefix("KAKENHI-PROJECT-")
+            grant_id = f"KAKENHI-PROJECT-{project_id}"
         api_url = self._localized_url(grant)
         project: dict[str, Any] = {
-            "id": f"KAKENHI-PROJECT-{project_id}",
-            "url": api_url or self._project_url(project_id),
+            "id": grant_id,
+            "url": api_url or self._grant_url(grant_id),
         }
 
         self._put(project, "title", self._child_text(summary, "title"))
@@ -439,21 +456,21 @@ class KakenClient:
         return {"total_count": total, "researchers": researchers}
 
     def _parse_researcher(self, researcher: Mapping[str, Any]) -> dict[str, Any]:
-        number = ""
-        record_source = researcher.get("recordSource")
-        if isinstance(record_source, Mapping):
-            number = self._first_string(record_source.get("id:person:kakenhi"))
-        if not number:
-            number = self._first_string(researcher.get("id:person:erad"))
-
+        number = self._first_string(researcher.get("id:person:erad"))
         accn = researcher.get("accn")
-        nrid = accn if isinstance(accn, str) and re.fullmatch(r"\d{13}", accn) else f"1000{number}"
+        nrid_match = re.search(r"(?<!\d)(\d{13})(?!\d)", accn) if isinstance(accn, str) else None
+        nrid = nrid_match.group(1) if nrid_match is not None else ""
+        if not number and nrid.startswith("1000"):
+            number = nrid.removeprefix("1000")
+        if not nrid and re.fullmatch(r"\d{8,9}", number):
+            nrid = f"1000{number.zfill(9)}"
 
         result: dict[str, Any] = {
             "researcher_number": number,
             "name": self._human_text(researcher.get("name")),
-            "url": f"{self.settings.researcher_base_url}/ja/nrid/{nrid}/",
         }
+        if nrid:
+            result["url"] = f"{self.settings.researcher_base_url}/ja/nrid/{nrid}/"
         affiliations = researcher.get("affiliations:current")
         if isinstance(affiliations, list) and affiliations:
             affiliation = min(
@@ -473,8 +490,8 @@ class KakenClient:
                 self._put(result, "job_title", job_title)
         return result
 
-    def _project_url(self, project_id: str) -> str:
-        return f"{self.settings.base_url}/ja/grant/KAKENHI-PROJECT-{project_id}/"
+    def _grant_url(self, grant_id: str) -> str:
+        return f"{self.settings.base_url}/ja/grant/{grant_id}/"
 
     @classmethod
     def _localized_url(cls, grant: ElementTree.Element) -> str:
